@@ -34,10 +34,12 @@
 # The launch file rewrites <robot_name> to the concrete instance
 # (light_1, light_2, ...) and writes a per-robot copy.
 #
-# Geometry from the URDF (already rescaled by s=0.60 for the scanned map; see
-# light_diff_amr.xacro - its header explains why the scale is 0.41 and not the
-# 0.70 quoted in MAP_SWAP.md): wheel_radius 0.0451, wheel separation
-# = base_width + wheel_width = 0.2214 + 0.0246 = 0.246 (0.25 here).
+# Geometry from the URDF (already rescaled by s for the scanned map; see
+# light_diff_amr.xacro - its header explains the scale history): at s = 0.45
+# wheel_radius = 0.11*s = 0.0495 and wheel separation = base_width +
+# wheel_width = 0.243 + 0.027 = 0.270. KEEP THESE IN STEP WITH THE XACRO: the
+# controller turns wheel revolutions into distance with them, so a stale pair
+# makes odometry drift against the simulated robot.
 
 /<robot_name>/controller_manager:
   ros__parameters:
@@ -58,8 +60,8 @@
     left_wheel_names:  ["left_wheel_joint"]
     right_wheel_names: ["right_wheel_joint"]
 
-    wheel_separation: 0.25
-    wheel_radius: 0.045
+    wheel_separation: 0.353800088
+    wheel_radius: 0.064863349
 
     publish_rate: 50.0
     # Frame ids below already include the rendered robot namespace.

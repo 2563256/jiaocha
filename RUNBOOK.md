@@ -1,17 +1,117 @@
+## 2026-10-10 x=2 分散充电位
+
+light_1=(2.00,-11.50)，light_2=(2.00,-21.50)，heavy_1=(2.00,-38.00)，omni_1=(2.00,-69.50)，yaw 均为 0。
+出生位与充电位同步，Gazebo 标记同步。四车分别验证其他三车停放时到允许的各任务点的可达性；
+北部点仍仅轻型车执行。停放会车效果需重启后动态验证；加载新出生位和充电标记需重启整套仿真。
+
+## 2026-10-10 按车辆独立返充电位
+
+完成任务后先接续本车能执行的待办任务；没有本车可执行任务时，默认空闲 2 秒后返自己的充电位。
+_drive_home 的二次检查由车队级 _work_remains 改为 _work_for(robot)，其他车辆仍在执行任务不再阻止返航。
+开始返航时再次检查本车是否已有可执行任务，避免新任务到达与返航启动竞争。
+恢复默认保持启用，充电行程继续记录里程/能耗。需重启 fleet_manager（建议整套仿真）后生效。
+
+## 2026-10-10 放宽停滞检测
+
+调度器停滞窗口由 15 s 改为 30 s；目标误差改善 0.05 m 即算进展（原 0.10 m）；
+绕行相对上次进展位置移动 0.40 m 即刷新检测窗口（原 1.20 m），允许缓慢、暂时远离目标的绕行。
+Nav2 进度检查由 30 s 内移动 0.20 m 放宽为 45 s 内移动 0.15 m。
+恢复次数、到达判定和低频 0.12 m 倒退不变。配置在节点启动时读取，需重启仿真后生效。
+
+## 2026-10-10 恢复原彩色 Gazebo 外观
+
+撤销灰色 walls_smoothed 渲染替换，model.sdf 再次使用原 geomap_combined12_noroof.obj 及 MTL/atlas 贴图。
+地图与碰撞边缘从原始备份重新做 0.10 m 轻微平滑（970 格去毛刺、211 格填浅槽），
+避免累积上次 0.15 m 处理。通道净宽和连通性保护保持；原扫描的可见外形与颜色不修改。
+GPU 雷达重新读取原扫描可见几何，导航/碰撞几何与其在局部细节上仍可能存在小差异。
+Nav2 调优与任务、车型限制保持。需重启 Gazebo 才能恢复已加载场景的彩色外观。
+
+## 2026-10-10 墙体平滑与 Nav2 避障调优
+
+原地图备份：tools/data/geomap_before_wall_smoothing.pgm。tools/smooth_wall_map.py 对全图做 0.15 m 边缘平滑，
+保留薄墙、独立家具和通道中心净宽；去除 1492 格毛刺、填补 337 格浅槽，可通行面积净增 2.8875 m²。
+0.20/0.30/0.50/0.55/0.70 m 净空区域均未损失已有通行格与连通关系，20223 个中心线样本净空未减小。
+地图生成器增加默认 --wall-smooth-radius 0.15，之后重生成仍会保留此平滑步骤；设为 0 可禁用。
+Gazebo 实体墙与 GPU 雷达渲染墙同步由地图构造。原彩色扫描网格仍保留为资源，当前场景改为统一灰色墙面，
+避免旧扫描毛刺被 GPU 雷达重新标记为障碍。该渲染变化不影响机器人配色。
+Nav2 三车型：软膨胀梯度半径 0.50 m、衰减系数 3.0，Smac2D cost_travel_multiplier=4.0，
+MPPI 全车型 consider_footprint=true，PathAlignCritic 权重 8.0，critical_weight=25.0，碰撞余量 0.07 m。
+速度上限保持。低频 12 cm 倒退恢复保留；CBS 默认关闭；北部任务仍仅轻型。
+verify_scene 使用原有“内切半径 + 0.30 m”净空标准；软膨胀梯度半径不等于实体障碍厚度。
+111 项测试通过，6 项因北部点不允许重型/omni 而跳过。动态避障与 20 任务成功率需重启后实跑对比。
+必须停止任务发布程序并重启整套仿真，才能加载新地图、墙体、传感器几何和导航参数。
+
+## 2026-10-10 北部房间轻型专用任务
+
+新增 P6=(5.00,-17.50)、P7=(12.00,-12.50)、D6=(10.00,-21.00)。
+20 个任务仍使用不同的起终点组合。t01、t02、t03、t10、t11、t13 涉及北部点，
+明确 required_capability=light_payload，载重均不超过 20 kg，只有 light_1/light_2 可执行。
+其他任务保持原有能力限制。demo_10 的相关任务同步修改。CBS 调度保持默认关闭。
+新的任务若使用 P6/P7/D6，也必须指定 light_payload；当前限制由任务能力字段执行。
+需重启仿真加载新场景标记、重新发布任务文件；旧任务不会被自动改写。
+
+## 2026-10-10 室内分散站点与 20 个不同任务组合
+
+S1=(12.00,-10.20)、S2=(12.00,-26.00)，充电位与出生点同步移动。
+P1=(13.00,-30.00)、P2=(2.97,-30.25)、P3=(9.00,-53.50)、P4=(10.00,-33.80)、P5=(5.00,-67.00)。
+D1=(8.00,-25.60)、D2=(8.00,-43.60)、D3=(10.22,-37.50)、D4=(10.20,-49.20)、D5=(6.00,-70.00)。
+任务与场景标记同步：mixed_20 的 20 个有向起终点组合均不同，每个取货/送货点各使用 4 次。
+任务载重、能力、优先级和截止时间保持。demo_10 也更新为新坐标。
+四车到十个工作点、其他三车停在出生位的 40 项保守离线规划检查通过；不启用 CBS 调度。
+地图连通与间距检查通过。共用门口和通道仍会重叠；实际会车与任务完成情况需重启仿真实跑验证。
+需停止旧任务发布程序并重启整套仿真，再发布新版任务，才能使用新位置。
+
+## 2026-10-09 heavy 防倾与低频短倒退
+
+实测 heavy 在 (2.97,-23.06) 处倾斜约 17.6 度，导航有速度指令但车身不移动。
+增加后部防倾球支撑：正常离地约 8.9 mm，约 2.4 度后倾时接地，保持原外形轮廓。
+停滞恢复先重规划；连续第二次停滞才允许 BackUp，默认 0.12 m、0.06 m/s、4 秒动作预算，
+每段最多一次、每车至少 120 秒冷却。后方碰撞检测仍启用；普通行为树不加入循环 BackUp。
+更新涉及 Gazebo 模型和行为插件，须重启整套仿真。84 项测试通过；完整动态任务仍待重启实测。
+
+## 2026-10-09 独立 Nav2 不行驶修正
+
+切回独立导航后，CBS 增加的多个 goal checker 导致默认行为树空 checker ID 被拒绝。
+两份 no_backup 行为树的 FollowPath 已明确指定 `goal_checker_id="general_goal_checker"`。
+需重新启动仿真：运行中的 bt_navigator 缓存了旧行为树，修改文件不会替换已加载的树。
+
+## 当前默认：恢复原调度算法（2026-10-09）
+
+默认 `use_cbs:=false`：按车型能力筛选，结合距离、负载、能耗等成本进行贪心任务分配，
+每辆车通过 Nav2 NavigateToPose 独立导航（SMAC2D 全局规划、MPPI 局部避障）。
+CBS 默认关闭，保留为可选功能。车体尺寸、膨胀半径、队友障碍感知以及移除后退恢复的修改保持。
+重新启动仿真后生效；已有节点不会自动读取代码修改。启动时请移除旧命令中的 `use_cbs:=true`。
+
+## 2026-10-09 连续 CBS 执行修正
+
+取消每 0.20 m 全车到达屏障，按共享路段的实际通行进度放行连续 FollowPath。
+新任务与已执行路线冲突时排队，无冲突时加入，不再打断全车。
+修改调度器后需重新启动 fleet_manager，或重新启动整套仿真；运行中的 Python 节点不会自动加载新代码。
+
 # RUNBOOK —— 换地图后的运行指令
 
+> CBS 失败修复：四台车出生/充电位已分散到侧边；不再停成封路队列。须完整重启，不能仅重启调度器。
+
+
+> 2026-10-09：默认启用 CBS（`use_cbs:=true`）。任务分配仍按能力和成本，路径由 CBS 协调，
+> 每个逻辑时间步通过到达屏障交给 MPPI 执行，保留等待；无解不转独立导航。
+> 对照模式可用 `use_cbs:=false`。没有 PolygonSlow，也没有卡死后倒退恢复。
+> 启用新配置须重启完整仿真，等待约 3 分钟再发布任务。详细说明见 README §16。
+
 这份工作空间 = 原来的 `hetero_fleet_ws`（仓库地图）换成了点云扫描地图
-`geomap_final_noroof`，车队 **4 台**（light_1 / light_2 / heavy_1 / omni_1，三种构型）。
+`geomap_combined12_noroof`（25.0 × 84.2 m 的实景楼，主走廊 ~3 m 宽），车队 **4 台**
+（light_1 / light_2 / heavy_1 / omni_1，三种构型）。
 地图是怎么处理、尺寸怎么定的，见 [`MAP_SWAP.md`](MAP_SWAP.md)
 （那是换图当时的历史记录，部分数字已被后续调整覆盖；**当前状态以 [`README.md`](README.md) 为准**）。
 
-工作空间：`/home/xuzhijie/hetero_fleet_geomap_ws`
-（原工作空间 `/home/xuzhijie/hetero_fleet_ws` 没有被改动）
+工作空间：`/home/xuzhijie/hetero_fleet_geomap123_ws`
+（上一张图的 `/home/xuzhijie/hetero_fleet_geomap_ws` 和仓库图版的
+`/home/xuzhijie/hetero_fleet_ws` 都没有被改动）
 
 ## 0. 每个新终端的一次性环境准备
 
 ```bash
-cd /home/xuzhijie/hetero_fleet_geomap_ws
+cd /home/xuzhijie/hetero_fleet_geomap123_ws
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 
@@ -36,7 +136,7 @@ export ROS_DOMAIN_ID=42                    # 与机器上其它 ROS 程序隔离
 ## 1. 编译
 
 ```bash
-cd /home/xuzhijie/hetero_fleet_geomap_ws
+cd /home/xuzhijie/hetero_fleet_geomap123_ws
 source /opt/ros/jazzy/setup.bash
 colcon build
 source install/setup.bash
@@ -73,50 +173,46 @@ ros2 action list | grep navigate_to_pose        # 期望 4 条
 
 ## 3. 任务点与充电位（新地图）
 
-六个取货/卸货点**沿回型东半圈交替铺开**——沿 +4.2 m 那条边自西向东，再沿南侧走廊
-往西回来。相邻两点 1.9~3.7 m，排得比较松（原来取货点和卸货点是一对一对紧挨着的，
-只有 2.2 m，四台车挤在同一个小角落正是实测中所有卡死的来源）。两处**不放点**：
+这张图是一栋 25 × 84 m 的长楼：**主走廊沿 x≈−1.6 从北往南约 65 m**，东侧挂着一串
+房间/分支。点位的摆法就是照着这条走廊来的：
 
-* 南侧走廊 x≈5.5~6.8 那个最窄处（净空只有 0.6 m）；
-* **东侧连接段**（x≈11.6~12.4，y −0.3~4.2）。它是回型走廊东端**唯一**的南北通道，
-  `dropoff_C` 原来在 (12.05, 2.40) 正好堵在中间——实测一轮 42 次卡死里有 **25 次**
-  发生在这里：有车在那儿作业就封了通道，南北往返必须跟它正面相遇，然后僵住。
-  已挪到北侧走廊东端 (11.0, 4.22)，连接段空出来。
-
-**四个充电位在南侧走廊贴南墙排成一排**（间距 1.5 m，都朝东），在 x≈5.5~6.8 那个
-最窄处**西边**：那段走廊有 2.2~2.4 m 宽，停一列车之后上方还留 ≥1.0 m 的通行道，
-所以不挡路；而且每台车能直接往东/往西拐出来，不用倒着从一排车后面挪出来
-（原来那种首尾相接的摆法就有这个问题）。东段南墙能排开车的地方只有 3.2 m，只放得下
-3 台。
+* **四个充电位排在主走廊最北端那间最宽敞的房间里**（x=−1.60，y −11.0 / −12.7 /
+  −14.4 / −16.1，间距 1.7 m，都朝东），一排停好后走廊还剩 ≥1.0 m 通行道；
+* **六个取货/卸货点沿走廊往南铺开**，相邻两点 6~15 m，直线距离 5.9~26.1 m —— 比上一张
+  图的 1.9~3.7 m 松得多（上一张图取货点和卸货点紧挨着，四台车挤在一个小角落，
+  是当时实测里所有卡死的来源）；
+* **门洞/咽喉处不放点**：走廊本身 ~3 m 宽，但通往东侧房间的几个门洞净空只有
+  1.0~1.6 m，作业点如果正好压在门洞里，有车干活就封了通道、南北往返必须正面相遇。
+  `dropoff_C` 因此放在东侧分支房间内部 (10.22, −37.50)，而不是门洞上。
 
 | 区域 | 坐标 (x, y) | 净空 (m) |
 | --- | --- | --- |
-| pickup_A | (10.60,-0.43) | 0.96 |
-| pickup_B | ( 1.70, 4.22) | 0.85 |
-| pickup_C | ( 9.10, 4.22) | 0.85 |
-| dropoff_A | ( 8.10,-0.43) | 1.10 |
-| dropoff_B | ( 5.40, 4.22) | 0.95 |
-| dropoff_C | (11.00, 4.22) | 0.97 |
-| charger_A | (-0.30,-0.75) | 0.72 |
-| charger_B | ( 1.20,-0.95) | 0.70 |
-| charger_C | ( 2.70,-0.85) | 0.70 |
-| charger_D | ( 4.20,-0.85) | 0.70 |
+| pickup_A | (-1.68,-19.00) | 1.00 |
+| pickup_B | ( 2.97,-30.25) | 1.40 |
+| pickup_C | (-1.73,-51.05) | 1.32 |
+| dropoff_A | (-1.68,-24.95) | 1.35 |
+| dropoff_B | (-1.53,-39.65) | 1.64 |
+| dropoff_C | (10.22,-37.50) | 1.23 |
+| charger_A | (-1.60,-11.00) | 1.45 |
+| charger_B | (-1.60,-12.70) | 0.97 |
+| charger_C | (-1.60,-14.40) | 1.50 |
+| charger_D | (-1.60,-16.10) | 1.10 |
 
 这些坐标全部经过 `tools/verify_scene.py` 校验：在自由格上、净空足够四种机型
-（最宽的 omni 需要 0.53 m）、且落在同一个连通的可行驶区域里。四个充电位相邻间距
-1.50 m。
+（最宽的 omni 需要 0.53 m）、且落在同一个连通的可行驶区域里（脚本输出 `region 3`）。
+充电位相邻间距 1.70 m。
 
 **出生点 = 充电位**，一车一位（`robot_profiles.yaml` 里每台车同时写了
 `spawn` 和 `charger`，两个值必须一致）：
 
 | 机器人 | 充电位 |
 | --- | --- |
-| light_1 | charger_A (-0.30,-0.75) 排头（西端） |
-| light_2 | charger_B ( 1.20,-0.95) |
-| heavy_1 | charger_C ( 2.70,-0.85) |
-| omni_1 | charger_D ( 4.20,-0.85) 排尾（东端） |
+| light_1 | charger_A (-1.60,-11.00) 排头（北端） |
+| light_2 | charger_B (-1.60,-12.70) |
+| heavy_1 | charger_C (-1.60,-14.40) |
+| omni_1 | charger_D (-1.60,-16.10) 排尾（南端） |
 
-地图是 `geomap_final_noroof`：26.0 × 10.3 m。
+地图是 `geomap_combined12_noroof`：25.0 × 84.2 m，可通行 718.3 m²。
 
 ## 4. 发任务
 
@@ -126,7 +222,7 @@ ros2 action list | grep navigate_to_pose        # 期望 4 条
 # A. 单条（pickup_A -> dropoff_C，走廊全长）
 ros2 run hetero_fleet_scheduler task_publisher --single \
   --capability light_payload --payload 12 \
-  --pickup 4.00 -0.50 --dropoff 11.79 0.50 --priority 2 --deadline 900
+  --pickup -1.68 -24.95 --dropoff 10.22 -37.50 --priority 2 --deadline 900
 
 # B. 预设 10 任务场景（含 1 条故意不可完成的任务）
 ros2 run hetero_fleet_scheduler task_publisher \
@@ -138,7 +234,7 @@ ros2 run hetero_fleet_scheduler task_publisher \
 
 # D. 直接 pub（id 必须唯一）
 ros2 topic pub --once /task_request hetero_fleet_msgs/msg/Task \
-"{id: 'adhoc_1', type: 'transport', pickup: {x: 4.00, y: -0.50}, dropoff: {x: 11.79, y: 0.50}, payload_kg: 12.0, required_capability: 'light_payload', priority: 2, deadline_sec: 600.0}"
+"{id: 'adhoc_1', type: 'transport', pickup: {x: -1.68, y: -24.95}, dropoff: {x: 10.22, y: -37.50}, payload_kg: 12.0, required_capability: 'light_payload', priority: 2, deadline_sec: 600.0}"
 ```
 
 字段约定：
@@ -252,22 +348,22 @@ cat metrics/tasks.csv
 ```
 
 RViz 左侧 `task_markers` 显示每台车的状态块（固定在地图四角：
-light_1 左上、light_2 右上、heavy_1 左下、omni_1 右下；字号 0.6 m），
-以及每条任务的线段与状态标签。
+light_1 左上、light_2 右上、heavy_1 左下、omni_1 右下；这张 84 m 长的图用
+字号 1.6 m），以及每条任务的线段与状态标签。
 
 调整面板位置/字号（不必改代码）：
 
 ```bash
 ros2 run hetero_fleet_scheduler fleet_manager --ros-args \
-  -p status_panel_x_min:=-11.0 -p status_panel_x_max:=14.4 \
-  -p status_panel_y_min:=-3.0 -p status_panel_y_max:=6.9 \
-  -p status_panel_text_height:=0.6
+  -p status_panel_x_min:=-12.0 -p status_panel_x_max:=25.0 \
+  -p status_panel_y_min:=-82.0 -p status_panel_y_max:=17.0 \
+  -p status_panel_text_height:=1.6
 ```
 
 面板默认布局：四台车各占矩形一个角，再往矩形中心内缩 `status_panel_inset_m`
-（默认 2.6 m）——直接钉在角上会落在未扫描的黑色区域里，和地图完全脱开。
-这个矩形默认贴着地图边界（x -11.0~14.4，y -3.0~6.9），所以四个块都在地图内、
-且离最近的任务点 2.1~7.5 m，不会压住机器人正在作业的托盘。要单独挪某一块：
+（默认 4.0 m）——直接钉在角上会落在未扫描的黑色区域里，和地图完全脱开。
+这个矩形默认包住整张扫描图（x -12.0~25.0，y -82.0~17.0），所以四个块都落在楼外
+~4 m 处，不会压住机器人正在作业的托盘。要单独挪某一块：
 
 ```bash
 # 绝对坐标（不是相对角点），名字用机器人名
@@ -285,7 +381,7 @@ ros2 launch hetero_fleet_bringup nav2.launch.py
 
 # 单测某台车的导航（绕过调度器）
 ros2 action send_goal /omni_1/navigate_to_pose nav2_msgs/action/NavigateToPose \
-"{pose: {header: {frame_id: map}, pose: {position: {x: 11.79, y: 0.50}, orientation: {w: 1.0}}}}"
+"{pose: {header: {frame_id: map}, pose: {position: {x: 10.22, y: -37.50}, orientation: {w: 1.0}}}}"
 
 # 控制器状态
 ros2 control list_controllers -c /light_1/controller_manager
@@ -300,7 +396,7 @@ python3 tools/verify_scene.py
 前台运行的用 Ctrl-C；后台运行的直接跑：
 
 ```bash
-cd /home/xuzhijie/hetero_fleet_geomap_ws
+cd /home/xuzhijie/hetero_fleet_geomap123_ws
 tools/cleanup_fleet.sh
 ```
 

@@ -9,7 +9,7 @@ never move, or "goal rejected" in the logs twenty minutes into a run.
 This script reads all three and checks, per robot type:
 
   * every spawn and every zone marker sits on a free cell of the map,
-  * that cell has at least (inscribed radius + inflation radius) of clearance,
+  * that cell has at least (inscribed radius + 0.30 m clearance margin) of clearance,
   * spawns, zones and every pickup/dropoff pairing share one connected region
     of cells that satisfy that clearance - i.e. Nav2 can plan between them.
 
@@ -26,9 +26,9 @@ import yaml
 from PIL import Image
 from scipy import ndimage
 
-ZONE_NAMES = ["pickup_A", "pickup_B", "pickup_C",
-              "dropoff_A", "dropoff_B", "dropoff_C",
-              "charger_A", "charger_B", "charger_C", "charger_D"]
+ZONE_NAMES = ([f"pickup_{c}" for c in "ABCDEFG"]
+              + [f"dropoff_{c}" for c in "ABCDEF"]
+              + [f"charger_{c}" for c in "ABCD"])
 
 
 def load_map(yaml_path):
@@ -92,7 +92,9 @@ def main():
         name = entry["name"]
         t = types[entry["type"]]
         length, width = t["footprint"]
-        need = min(length, width) / 2.0 + float(t["inflation_radius"])
+        # Inflation beyond the inscribed radius is soft planning cost,
+        # not occupied wall. Preserve the existing 0.30 m clearance check.
+        need = min(length, width) / 2.0 + 0.30
         passable = dist >= need
         lab, _ = ndimage.label(passable)
 

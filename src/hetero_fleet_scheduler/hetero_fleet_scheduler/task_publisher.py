@@ -11,10 +11,10 @@ Two ways to use it:
   2. Send a single ad-hoc task from the command line:
          ros2 run hetero_fleet_scheduler task_publisher \
              --single --capability heavy_payload --payload 120 \
-             --pickup -4.16 5.10 --dropoff 7.44 -1.15
+             --pickup 2.97 -30.25 --dropoff -1.53 -39.65
 
-   (Those coordinates are pickup_A and dropoff_C of the scanned map; the zone
-   list is in this workspace's MAP_SWAP.md.)
+   (Those coordinates are pickup_B and dropoff_B of the scanned building; the
+   zone list is in README.md section 4 and in MAP_SWAP.md.)
 
 Task ids are generated automatically for --single so repeated invocations do
 not collide. Scenario tasks keep the ids written in the file, which makes the

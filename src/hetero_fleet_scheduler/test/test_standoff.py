@@ -226,6 +226,16 @@ def make_manager(nav=None, return_to_charger=True, charger=(5.0, 5.0, 0.0)):
     m.clear_task_point_radius_m = 1.2
     m._idle_since = {"r1": None}
     m.charger_arrive_radius_m = 0.35
+    # Fleet-level CBS planning is deliberately OFF here. These tests are about
+    # the stall watchdog and the charger round trip, and they drive a scripted
+    # action server that answers one goal at a time; routing them through the
+    # joint planner would just add a second action client to script. The
+    # planner has its own tests in test_cbs.py.
+    m.use_cbs = False
+    m.leg_target = {}
+    m.route_dirty = {"r1": False}
+    m.nav_mode = {"r1": "-"}
+    m._traffic = None
     m.stall_timeout_sec = 0.25
     m.stall_move_eps_m = 0.05
     m.stall_yaw_weight = 0.30
@@ -509,64 +519,23 @@ def test_navigate_accepts_an_arrival_the_navigator_never_confirmed():
 
 
 def test_navigate_does_not_accept_an_arrival_it_has_not_reached():
-    """A robot wedged 2 m short must still be reversed, not declared arrived."""
+    """A stalled robot must retry the target without accepting a false arrival."""
     m = make_manager()
-    nav = ScriptedNav(m, "r1", ["wedged", "drive", "drive"], pose=(0.0, 0.0, 0.0))
+    nav = ScriptedNav(m, "r1", ["wedged", "drive"], pose=(0.0, 0.0, 0.0))
     place(m, (0.0, 0.0, 0.0))
     m.nav_clients["r1"] = nav
     robot = m.robots["r1"]
     robot.status = RobotStatus.TO_PICKUP
     ok, _, _ = m._navigate(robot, Pose2D(4.0, 0.0, 0.0), "t1:pickup")
     assert ok is True
-    assert len(nav.goals) == 3                 # 1 wedged + reverse + retry
-    assert messages_containing("reversing")
-
-
-def test_back_off_reverses_and_reports_the_distance_driven():
-    m = make_manager()
-    nav = ScriptedNav(m, "r1", ["drive"], pose=(3.0, 1.0, 0.0))
-    place(m, (3.0, 1.0, 0.0))
-    m.nav_clients["r1"] = nav
-    moved = m._back_off(m.robots["r1"])
-    assert moved > 0.0
-    goal = nav.goals[-1].goal.pose.pose.position
-    # Reversing from (3,1) facing +x must go to smaller x on the same y.
-    assert goal.x < 3.0
-    assert abs(goal.y - 1.0) < 1e-6
-
-
-def test_back_off_avoids_reversing_into_a_teammate():
-    """The jam this map produces is a cluster, so retreating must spread it."""
-    m = make_manager()
-    nav = ScriptedNav(m, "r1", ["drive"], pose=(3.0, 1.0, 0.0))
-    place(m, (3.0, 1.0, 0.0))
-    # A teammate sitting exactly where the straight reverse would end up.
-    m.live_pose["r2"] = (2.5, 1.0, 0.0)
-    m.nav_clients["r1"] = nav
-    moved = m._back_off(m.robots["r1"])
-    goal = nav.goals[-1].goal.pose.pose.position
-    assert moved > 0.0
-    # It must not drop the robot on top of r2.
-    assert ((goal.x - 2.5) ** 2 + (goal.y - 1.0) ** 2) ** 0.5 > 0.35
-
-
-def test_back_off_retreats_further_on_each_retry():
-    m = make_manager()
-    nav = ScriptedNav(m, "r1", ["drive"] * 4, pose=(3.0, 1.0, 0.0))
-    place(m, (3.0, 1.0, 0.0))
-    m.nav_clients["r1"] = nav
-    first = m._back_off(m.robots["r1"], attempt=1)
-    second = m._back_off(m.robots["r1"], attempt=2)
-    third = m._back_off(m.robots["r1"], attempt=3)
-    assert first < second < third
-    # ...but never past the configured ceiling, however many times we retry.
-    assert m._back_off(m.robots["r1"], attempt=50) <= m.stall_backoff_max_m
+    assert len(nav.goals) == 2                 # stalled goal + retry at same target
+    assert not messages_containing("reversing")
 
 
 def test_navigate_recovers_from_one_stall_and_still_succeeds():
     m = make_manager()
     #            goal 1 (pickup)   goal 2 (reverse)  goal 3 (retry, arrives)
-    nav = ScriptedNav(m, "r1", ["wedged", "drive", "drive"], pose=(0.0, 0.0, 0.0))
+    nav = ScriptedNav(m, "r1", ["wedged", "drive"], pose=(0.0, 0.0, 0.0))
     place(m, (0.0, 0.0, 0.0))
     m.nav_clients["r1"] = nav
     robot = m.robots["r1"]
@@ -575,9 +544,10 @@ def test_navigate_recovers_from_one_stall_and_still_succeeds():
     assert ok is True
     assert nav.goals[0].kind == "wedged"
     assert nav.goals[0].canceled is True      # preempted before reversing
-    assert len(nav.goals) == 3
+    assert len(nav.goals) == 2
+    assert all(h.goal.pose.pose.position.x == 4.0 for h in nav.goals)
     # The leg's reported distance covers the detour, not just the straight line.
-    assert dist > 4.0
+    assert dist == 4.0
     assert energy > 0.0
     assert robot.pose.x == 4.0
 
@@ -594,7 +564,8 @@ def test_navigate_gives_up_after_the_recovery_budget_is_spent():
     ok, dist, energy = m._navigate(robot, Pose2D(4.0, 0.0, 0.0), "t1:pickup")
     assert ok is False
     assert (dist, energy) == (0.0, 0.0)
-    assert len(nav.goals) == 1 + 2 * m.stall_max_recoveries
+    assert len(nav.goals) == 1 + m.stall_max_recoveries
+    assert all(h.canceled for h in nav.goals)
     assert messages_containing("still wedged")
 
 
@@ -637,3 +608,75 @@ def test_drive_home_never_leaves_a_robot_stuck_in_charging():
     m._drive_home(robot)                       # must not raise
     assert robot.status == RobotStatus.IDLE
     assert messages_containing("charger leg crashed")
+
+
+def test_short_backoff_is_small_and_has_robot_cooldown():
+    from nav2_msgs.action import BackUp
+    m=FleetManager.__new__(FleetManager)
+    m.stall_backoff_distance_m=.12;m.stall_backoff_speed_mps=.06
+    m.stall_backoff_cooldown_sec=120.;m.last_backoff={}
+    sent=[]
+    class Client:
+        def wait_for_server(self,timeout_sec):return True
+        def send_goal_async(self,goal,feedback_callback):
+            sent.append(goal)
+            feedback_callback(SimpleNamespace(feedback=SimpleNamespace(distance_traveled=.12)))
+            result=resolved(SimpleNamespace(status=4,result=SimpleNamespace(distance_traveled=.12)))
+            return resolved(SimpleNamespace(accepted=True,get_result_async=lambda:result))
+    m.backup_clients={'heavy_1':Client()};m.get_logger=lambda:_Logger()
+    assert m._short_backoff('heavy_1')==pytest.approx(.12)
+    assert m._short_backoff('heavy_1')==0.
+    assert len(sent)==1 and isinstance(sent[0],BackUp.Goal)
+    assert sent[0].target.x==pytest.approx(-.12)
+    assert sent[0].speed==pytest.approx(.06)
+    assert sent[0].time_allowance.sec==4
+
+
+def test_obstructed_short_backoff_does_not_repeat_or_claim_full_distance():
+    m=FleetManager.__new__(FleetManager)
+    m.stall_backoff_distance_m=.12;m.stall_backoff_speed_mps=.06
+    m.stall_backoff_cooldown_sec=120.;m.last_backoff={};sent=[]
+    class Client:
+        def wait_for_server(self,timeout_sec):return True
+        def send_goal_async(self,goal,feedback_callback):
+            sent.append(goal)
+            feedback_callback(SimpleNamespace(feedback=SimpleNamespace(distance_traveled=.02)))
+            result=resolved(SimpleNamespace(status=6,result=SimpleNamespace(distance_traveled=.02)))
+            return resolved(SimpleNamespace(accepted=True,get_result_async=lambda:result))
+    m.backup_clients={'heavy_1':Client()};m.get_logger=lambda:_Logger()
+    assert m._short_backoff('heavy_1')==pytest.approx(.02)
+    assert m._short_backoff('heavy_1')==0.
+    assert len(sent)==1
+
+
+def test_slow_detour_away_from_goal_gets_fresh_stall_window():
+    m=make_manager();m.stall_wander_m=.4;m.stall_timeout_sec=.35
+    place(m,(0.,0.,0.));future=FakeFuture();outcome={}
+    thread=threading.Thread(target=lambda:outcome.update(result=m._wait_for_result(m.robots['r1'],Pose2D(50.,0.,0.),future)))
+    thread.start()
+    for i in range(1,17):
+        place(m,(-i*.1,0.,0.));time.sleep(.05)
+    future.set_result(SimpleNamespace(status=4));thread.join(1.)
+    assert not thread.is_alive()
+    assert outcome['result'][0]==4 and outcome['result'][1] is False
+
+
+def test_robot_returns_home_while_other_robot_and_ineligible_work_remain():
+    m=make_manager();robot=m.robots['r1'];robot.payload_capacity_kg=20.
+    m.robots['r2']=RobotState(id='r2',status=RobotStatus.TO_PICKUP,payload_capacity_kg=150.)
+    m.tasks['heavy_pending']=make_task('heavy_pending',50.)
+    m.pending=['heavy_pending']
+    nav=ScriptedNav(m,'r1',['drive'],pose=(1.,1.,0.));place(m,(1.,1.,0.));m.nav_clients['r1']=nav
+    robot.status=RobotStatus.CHARGING
+    assert m._work_remains() and not m._work_for(robot)
+    m._drive_home(robot)
+    assert len(nav.goals)==1 and robot.status==RobotStatus.IDLE
+    assert (nav.goals[0].goal.pose.pose.position.x,nav.goals[0].goal.pose.pose.position.y)==(5.,5.)
+
+
+def test_robot_skips_home_if_eligible_work_arrives_before_docking():
+    m=make_manager();robot=m.robots['r1'];robot.status=RobotStatus.CHARGING;robot.payload_capacity_kg=20.
+    m.tasks['new_task']=make_task('new_task',5.);m.pending=['new_task']
+    nav=ScriptedNav(m,'r1',['drive'],pose=(1.,1.,0.));place(m,(1.,1.,0.));m.nav_clients['r1']=nav
+    m._drive_home(robot)
+    assert not nav.goals and robot.status==RobotStatus.IDLE

@@ -2,16 +2,17 @@
 <!-- Heavy differential-drive AMR for pallet transport.
 
      SCALE: like the other two robots this is the warehouse design times `s`,
-     which is 0.45 here - NOT the 0.53 that MAP_SWAP.md's table still quotes.
-     The code is the source of truth: s=0.31 gives a 0.409 x 0.267 m body
-     (0.428 x 0.322 m including the bumper, wheels included), and the
+     which is 0.34 here - NOT the 0.53 that MAP_SWAP.md's table still quotes.
+     The code is the source of truth: s=0.34 gives a 0.449 x 0.292 m body
+     (0.469 x 0.354 m including the bumper, wheels included), and the
      controller geometry in heavy_diff_amr_controllers.yaml (wheel_radius
-     0.062 / separation 0.2945) was derived from exactly that. It started at
-     0.45 and has been shrunk twice since (0.36, now 0.31); see the note in
-     light_diff_amr.xacro. Masses scale as s^3, inertias as s^5, and the
+     0.068 / separation 0.323) was derived from exactly that. It started at
+     0.45, was shrunk twice (0.36, then 0.31), and was scaled back up to 0.34
+     on 2026-09-28; see the note in light_diff_amr.xacro.
+     Masses scale as s^3, inertias as s^5, and the
      shell mesh by s, so geometry, dynamics and visuals stay consistent.
 
-     The navigation footprint in robot_profiles.yaml (0.428 x 0.322 m) is
+     The navigation footprint in robot_profiles.yaml (0.469 x 0.354 m) is
      this same outline, measured by tools/measure_footprint.py.
 -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="heavy_diff_amr">
@@ -20,7 +21,7 @@
   <xacro:include filename="$(find hetero_fleet_description)/urdf/common.xacro"/>
   <xacro:property name="controllers_file" value="$(arg controllers_file)"/>
   <xacro:property name="robot_name" value="$(arg robot_name)"/>
-  <xacro:property name="s" value="0.31"/>
+  <xacro:property name="s" value="0.445526037015"/>
   <xacro:property name="base_length" value="${1.32 * s}"/>
   <xacro:property name="base_width" value="${0.86 * s}"/>
   <xacro:property name="base_height" value="${0.33 * s}"/>
@@ -80,6 +81,19 @@
   <link name="front_caster_link"><visual><geometry><sphere radius="${0.20 * s}"/></geometry><material name="rubber"><color rgba="0.04 0.04 0.04 1"/></material></visual><collision><geometry><sphere radius="${0.20 * s}"/></geometry></collision></link>
   <joint name="front_caster_joint" type="fixed"><parent link="heavy_caster_fork_link"/><child link="front_caster_link"/><origin xyz="0 0 ${-0.02 * s}"/></joint>
 
+  <!-- Normally clear of the floor by 0.02*s. This rear safety caster
+       arrests backward tipping before the guards touch down and unload the
+       drive wheels. Unlike a fourth coplanar support it does not carry weight
+       during normal driving or compete with the front caster. -->
+  <link name="rear_safety_caster_link">
+    <visual><geometry><sphere radius="${0.18 * s}"/></geometry><material name="rubber"><color rgba="0.04 0.04 0.04 1"/></material></visual>
+    <collision><geometry><sphere radius="${0.18 * s}"/></geometry></collision>
+  </link>
+  <joint name="rear_safety_caster_joint" type="fixed">
+    <parent link="base_link"/><child link="rear_safety_caster_link"/>
+    <origin xyz="${-0.48 * s} 0 0"/>
+  </joint>
+
   <link name="lidar_link">
     <inertial><mass value="0.18"/><inertia ixx="0.0003" ixy="0" ixz="0" iyy="0.0003" iyz="0" izz="0.0004"/></inertial>
     <visual><geometry><cylinder radius="${0.055 * s}" length="${0.06 * s}"/></geometry><material name="lidar"><color rgba="0.12 0.12 0.14 1"/></material></visual><collision><geometry><cylinder radius="${0.055 * s}" length="${0.06 * s}"/></geometry></collision>
@@ -96,5 +110,6 @@
   <xacro:fleet_gazebo_wheel_dynamics link="left_wheel_link" mu1="1.5" mu2="1.5" kp="10000" kd="100.0" fdir1="1 0 0"/>
   <xacro:fleet_gazebo_wheel_dynamics link="right_wheel_link" mu1="1.5" mu2="1.5" kp="10000" kd="100.0" fdir1="1 0 0"/>
   <xacro:fleet_gazebo_wheel_dynamics link="front_caster_link" mu1="0.0" mu2="0.0" kp="10000" kd="100.0"/>
+  <xacro:fleet_gazebo_wheel_dynamics link="rear_safety_caster_link" mu1="0.0" mu2="0.0" kp="10000" kd="100.0"/>
   <xacro:fleet_ros2_control name="${robot_name}" wheel_joints="${['left_wheel_joint', 'right_wheel_joint']}" controller_type="diff" controllers_file="${controllers_file}" namespace="${robot_name}"/>
 </robot>

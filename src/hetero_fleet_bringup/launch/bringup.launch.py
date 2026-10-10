@@ -11,10 +11,11 @@ Brings up, in order:
 Everything downstream waits on the clock, so we stagger the stages rather than
 starting them simultaneously and letting TF lookups race.
 
-This workspace runs on a scanned indoor map (geomap_colour_noroof) rather than
-the warehouse world - see MAP_SWAP.md for how the map, the robot sizes and the
-zone coordinates were derived. The timings below are unchanged: this map is
-smaller, but the same number of nodes still has to come up.
+This workspace runs on a scanned building (geomap_combined12_noroof, 25 x 84 m)
+rather than the warehouse world - see MAP_SWAP.md for how the map, the robot
+sizes and the zone coordinates were derived. The timings below are unchanged:
+the same number of nodes still has to come up, and this map is longer but not
+heavier than the lab map the workspace ran before it.
 """
 
 import importlib.util
@@ -32,6 +33,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def _load_gz_launch_module(gz_share):
@@ -114,12 +116,14 @@ def generate_launch_description():
         executable="fleet_manager",
         name="fleet_manager",
         output="screen",
-        parameters=[{"use_sim_time": use_sim_time}],
+        parameters=[{"use_sim_time": use_sim_time,
+                     "use_cbs": ParameterValue(LaunchConfiguration("use_cbs"), value_type=bool)}],
         condition=IfCondition(use_scheduler),
     )
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument("use_cbs", default_value="false"),
             DeclareLaunchArgument("headless", default_value="false"),
             DeclareLaunchArgument("rviz", default_value="true"),
             DeclareLaunchArgument("use_sim_time", default_value="true"),

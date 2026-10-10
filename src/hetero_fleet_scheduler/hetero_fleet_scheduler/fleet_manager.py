@@ -42,8 +42,8 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Pose2D as Pose2DMsg
 from geometry_msgs.msg import PoseStamped
-from nav2_msgs.action import NavigateToPose
-from nav_msgs.msg import Odometry
+from nav2_msgs.action import BackUp, FollowPath, NavigateToPose
+from nav_msgs.msg import Odometry, Path as PathMsg
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -55,6 +55,8 @@ from hetero_fleet_msgs.msg import FleetStatus, RobotState as RobotStateMsg, Task
 
 from .cost import CostWeights, evaluate, select_robot
 from .metrics import MetricsRecorder
+from .traffic import TrafficPlanner
+from .cbs_execution import CBSExecutor
 from .task_model import (
     Pose2D,
     RobotState,
@@ -103,7 +105,7 @@ def default_metrics_dir() -> str:
     `metrics_dir` parameter. The workspace root is derived from this package's
     install location (<ws>/install/<pkg>/share/<pkg> -> <ws>); if that cannot
     be resolved (running from source, package not indexed) we fall back to
-    ~/hetero_fleet_geomap_ws/metrics.
+    ~/hetero_fleet_geomap123_ws/metrics.
     """
     override = os.environ.get("HETERO_FLEET_METRICS_DIR", "").strip()
     if override:
@@ -114,7 +116,7 @@ def default_metrics_dir() -> str:
         return os.path.join(workspace, "metrics")
     except Exception:  # noqa: BLE001 - package index may be missing
         return os.path.join(
-            os.path.expanduser("~"), "hetero_fleet_geomap_ws", "metrics"
+            os.path.expanduser("~"), "hetero_fleet_geomap123_ws", "metrics"
         )
 
 
@@ -168,10 +170,10 @@ class FleetManager(Node):
         # same plan for minutes while the rest of the fleet queues up behind
         # it. The second, sneakier case is a robot that arrives ON the goal and
         # is never told it succeeded - it wanders around the pad forever.
-        self.declare_parameter("stall_timeout_sec", 15.0)
+        self.declare_parameter("stall_timeout_sec", 30.0)
         # Progress is measured as "closer to the goal", not as "moved", so this
         # is the improvement that has to happen to count as progress.
-        self.declare_parameter("stall_move_eps_m", 0.10)
+        self.declare_parameter("stall_move_eps_m", 0.05)
         # Yaw error counts as progress too, weighted into the same metric.
         # Without it a robot that has reached the goal position and is turning
         # on the spot to line up with the goal heading - exactly what the final
@@ -184,7 +186,7 @@ class FleetManager(Node):
         # the spot where it last made progress it is genuinely driving (around
         # the ring rather than straight at the goal), so it gets a fresh
         # window instead of being called wedged.
-        self.declare_parameter("stall_wander_m", 1.20)
+        self.declare_parameter("stall_wander_m", 0.40)
         # If the robot is this close to the goal when the stall fires, accept
         # the arrival instead of reversing. Nav2's own xy_goal_tolerance is
         # 0.15 m; 0.30 m is that plus the width of the zone markers this world
@@ -192,19 +194,13 @@ class FleetManager(Node):
         # pickup pad for minutes because the navigation stack never declared
         # success" hang.
         self.declare_parameter("stall_arrive_radius_m", 0.30)
-        # How far to reverse when breaking a standoff, and how long to give the
-        # reverse goal before giving up on it and re-planning from where we are.
-        self.declare_parameter("stall_backoff_m", 0.55)
-        # Each retry of the same leg reverses further than the last. A robot
-        # that has already backed up 0.55 m and re-planned into the same wall
-        # of traffic will not be helped by backing up 0.55 m again.
-        self.declare_parameter("stall_backoff_growth", 0.6)
-        self.declare_parameter("stall_backoff_max_m", 1.30)
-        self.declare_parameter("stall_backoff_sec", 15.0)
         # Recoveries per leg before the leg is declared failed. Failing is not
         # free - the task is requeued and the robot re-drives from its charger
         # - so this is deliberately > 1.
         self.declare_parameter("stall_max_recoveries", 3)
+        self.declare_parameter("stall_backoff_distance_m", 0.12)
+        self.declare_parameter("stall_backoff_speed_mps", 0.06)
+        self.declare_parameter("stall_backoff_cooldown_sec", 120.0)
         # --- returning to the charger -------------------------------------
         # When a robot runs out of work it drives back to the charger named in
         # its profile entry (and thus starts there too), so a finished fleet
@@ -220,37 +216,55 @@ class FleetManager(Node):
         # still holding a charger bay does nothing, so the fleet simply sits in
         # the bays until work arrives again.
         self.declare_parameter("return_to_charger", True)
-        self.declare_parameter("dock_when_idle_sec", 20.0)
+        self.declare_parameter("dock_when_idle_sec", 2.0)
         # A robot that has finished a job is usually standing ON the pad it
         # just used, which is the one place it must not loiter: the next task
         # for that pad has to queue behind it, and the whole point of the zone
         # slots is to stop exactly that. So an idle robot sitting on a pickup
         # or dropoff point goes home much sooner than the general threshold.
-        self.declare_parameter("clear_task_point_sec", 5.0)
+        self.declare_parameter("clear_task_point_sec", 2.0)
         self.declare_parameter("clear_task_point_radius_m", 1.2)
         # Close enough to count as "already home", metres. Re-driving a 5 cm
         # move that the controller would spend a recovery on is wasted time.
         self.declare_parameter("charger_arrive_radius_m", 0.35)
+        # --- CBS: conflict-free multi-robot path planning -------------------
+        # Every leg is planned jointly for the whole fleet with Conflict-Based
+        # Search on the occupancy grid, and each robot is then driven along its
+        # CBS route with Nav2's FollowPath action (the local controller, the
+        # costmaps and the collision monitor are untouched, so the reactive
+        # safety net - and the unexpected obstacle case - still works).
+        #
+        # Default to capability/cost assignment and independent Nav2 navigation.
+        self.declare_parameter("use_cbs", False)
+        self.declare_parameter("cbs_step_timeout_sec", 30.0)
+        self.declare_parameter("cbs_cell_m", 0.20)
+        self.declare_parameter("cbs_time_limit_sec", 3.0)
+        self.declare_parameter("cbs_max_expansions", 1200)
+        self.declare_parameter("cbs_margin_m", 0.30)
+        self.declare_parameter("cbs_retask_tol_m", 0.80)
         # Fixed RViz fleet-status blocks, in the map frame: one robot per
-        # corner of this rectangle. maps/geomap.yaml is 520 x 207 cells at
-        # 0.05 m (26.0 x 10.3 m) spanning x [-11.3, 14.7], y [-3.2, 7.1], and
-        # this rectangle hugs those bounds so that all four blocks land inside
-        # the map instead of hanging off its corners (where RViz clips them and
-        # they read as detached from the scene). With the default inset they
-        # sit 2.1-7.5 m from the nearest zone marker, so a label never covers
-        # the pad a robot is working on.
-        # Adjust to match your usual RViz view. text_height is in metres.
-        self.declare_parameter("status_panel_x_min", -11.0)
-        self.declare_parameter("status_panel_x_max", 14.4)
-        self.declare_parameter("status_panel_y_min", -3.0)
-        self.declare_parameter("status_panel_y_max", 6.9)
+        # corner of this rectangle. maps/geomap.yaml is 501 x 1684 cells at
+        # 0.05 m (25.0 x 84.2 m) spanning x [-6.1, 18.9], y [-74.4, 9.8], and
+        # this rectangle hugs those bounds so that all four blocks sit just
+        # outside the building instead of on top of it (RViz clips markers that
+        # hang off the whole-map view, and they then read as detached from the
+        # scene). The building is 3.4x longer than the lab map this workspace
+        # used to run, so the text is scaled up with it - at 0.6 m the four
+        # blocks are unreadable when the whole 84 m map fits in the window.
+        # With the default inset the corners land ~4 m outside the scanned
+        # footprint. Adjust to match your usual RViz view; text_height is in
+        # metres.
+        self.declare_parameter("status_panel_x_min", -12.0)
+        self.declare_parameter("status_panel_x_max", 25.0)
+        self.declare_parameter("status_panel_y_min", -82.0)
+        self.declare_parameter("status_panel_y_max", 17.0)
         self.declare_parameter("status_panel_z", 0.4)
-        self.declare_parameter("status_panel_text_height", 0.6)
+        self.declare_parameter("status_panel_text_height", 1.6)
         # How far each label is pulled from its corner towards the centre of
         # the panel rectangle, in metres, along the corner->centre diagonal.
         # A label parked on the exact corner sits in the unscanned (black)
         # part of the map, visually detached from the fleet.
-        self.declare_parameter("status_panel_inset_m", 2.6)
+        self.declare_parameter("status_panel_inset_m", 4.0)
         # Absolute map coordinates that override the corner for named robots,
         # as "name:x,y" entries. Unlike the rectangle above, both coordinates
         # are absolute, so this is the knob to use when one label lands
@@ -382,6 +396,37 @@ class FleetManager(Node):
                 callback_group=self.cb_group,
             )
 
+        # FollowPath is what the CBS routes are executed with: same controller,
+        # same costmaps, same collision monitor, but the path comes from the
+        # fleet-level planner instead of from each robot's own global planner.
+        self.backup_clients = {name: ActionClient(
+            self, BackUp, f"/{name}/backup", callback_group=self.cb_group
+        ) for name in self.robots}
+        self.last_backoff = {}
+        self.follow_clients: dict[str, ActionClient] = {}
+        self.cbs_plan_pubs: dict[str, object] = {}
+        for name in self.robots:
+            self.follow_clients[name] = ActionClient(
+                self, FollowPath, f"/{name}/follow_path",
+                callback_group=self.cb_group,
+            )
+            # Published on /<name>/cbs_plan so the CBS route can be added to
+            # RViz as a Path display and compared with what the robot does.
+            self.cbs_plan_pubs[name] = self.create_publisher(
+                PathMsg, f"/{name}/cbs_plan", 10
+            )
+        # name -> leg target of the leg that robot is executing right now;
+        # absent means "parked", which is what makes it a standing obstacle in
+        # the next joint plan.
+        self.leg_target: dict[str, Pose2D] = {}
+        # set when the joint plan has invalidated a robot's committed route, so
+        # its own leg thread re-sends the new one. Only the leg thread ever
+        # touches that robot's FollowPath goal - one owner per robot.
+        self.route_dirty: dict[str, bool] = {name: False for name in self.robots}
+        self.nav_mode: dict[str, str] = {name: "-" for name in self.robots}
+        self._traffic = None
+        self._cbs_executor = None
+
         # Guards the assignment path: several callbacks can try to schedule at
         # once (task arrival + robot idle), and double-assignment is the classic
         # bug in this kind of node.
@@ -401,20 +446,13 @@ class FleetManager(Node):
         self.stall_arrive_radius_m = float(
             self.get_parameter("stall_arrive_radius_m").value
         )
-        self.stall_backoff_m = float(self.get_parameter("stall_backoff_m").value)
-        self.stall_backoff_growth = float(
-            self.get_parameter("stall_backoff_growth").value
-        )
-        self.stall_backoff_max_m = float(
-            self.get_parameter("stall_backoff_max_m").value
-        )
-        self.stall_backoff_sec = float(
-            self.get_parameter("stall_backoff_sec").value
-        )
         self.stall_max_recoveries = int(
             self.get_parameter("stall_max_recoveries").value
         )
         # 0 or less disables the watchdog (useful for A/B runs).
+        self.stall_backoff_distance_m = min(0.15, max(0.0, float(self.get_parameter("stall_backoff_distance_m").value)))
+        self.stall_backoff_speed_mps = min(0.08, max(0.01, float(self.get_parameter("stall_backoff_speed_mps").value)))
+        self.stall_backoff_cooldown_sec = max(120.0, float(self.get_parameter("stall_backoff_cooldown_sec").value))
         self.stall_enabled = self.stall_timeout_sec > 0.0
         self.return_to_charger = self._as_bool(
             self.get_parameter("return_to_charger").value
@@ -430,6 +468,19 @@ class FleetManager(Node):
         )
         self.charger_arrive_radius_m = float(
             self.get_parameter("charger_arrive_radius_m").value
+        )
+        self.use_cbs = bool(self.get_parameter("use_cbs").value)
+        self.cbs_step_timeout_sec = float(self.get_parameter("cbs_step_timeout_sec").value)
+        self.cbs_cell_m = float(self.get_parameter("cbs_cell_m").value)
+        self.cbs_time_limit_sec = float(
+            self.get_parameter("cbs_time_limit_sec").value
+        )
+        self.cbs_max_expansions = int(
+            self.get_parameter("cbs_max_expansions").value
+        )
+        self.cbs_margin_m = float(self.get_parameter("cbs_margin_m").value)
+        self.cbs_retask_tol_m = float(
+            self.get_parameter("cbs_retask_tol_m").value
         )
         # When each robot last became IDLE, or None if it is not idle. Drives
         # the "the fleet has run out of work, go home" decision in _tick.
@@ -872,10 +923,9 @@ class FleetManager(Node):
                 self.metrics.note_completed(
                     task, robot, task.completed_at_sec, d_total, e_total
                 )
-                # Free the robot for the next task straight away. It does NOT
-                # drive home here: the trip back to the charger is a single
-                # end-of-day move driven from _tick (see dock_when_idle_sec),
-                # not something a robot does between two jobs.
+                # Take eligible queued work first. Otherwise the per-robot
+                # idle timer returns this vehicle to its own charging bay,
+                # independently of the rest of the fleet.
                 robot.status = RobotStatus.IDLE
                 robot.current_task_id = ""
                 robot.busy_until_sec = 0.0
@@ -969,7 +1019,7 @@ class FleetManager(Node):
         on its way to the bay.
         """
         with self._lock:
-            if robot.status != RobotStatus.IDLE:
+            if robot.status != RobotStatus.IDLE or self._work_for(robot):
                 return
             self._idle_since[robot.id] = None
             robot.status = RobotStatus.CHARGING
@@ -1003,7 +1053,7 @@ class FleetManager(Node):
                 # standing on it - re-issuing a centimetre goal is how a robot
                 # spends a whole recovery cycle going nowhere.
                 return
-            if not self.return_to_charger or self._work_remains():
+            if not self.return_to_charger or self._work_for(robot):
                 # Work arrived between the tick that decided to dock and this
                 # thread starting. Stay put and take it.
                 return
@@ -1056,6 +1106,180 @@ class FleetManager(Node):
         goal.pose.pose.orientation.z = qz
         goal.pose.pose.orientation.w = qw
         return goal
+
+    # ------------------------------------------------------------------
+    # CBS: one joint plan for the whole fleet, executed with FollowPath
+    # ------------------------------------------------------------------
+    def _traffic_planner(self) -> TrafficPlanner:
+        """The CBS planner, built on first use.
+
+        Deferred because constructing it reads and downsamples the 1.1M-cell
+        occupancy grid, which is wasted work when the node runs with
+        use_cbs:=false.
+        """
+        if self._traffic is None:
+            radii = {}
+            for name, r in self.robots.items():
+                length, width = self.types[r.type]["footprint"]
+                # half the longer side: the disc the MAPF grid plans for. The
+                # heavy AMR (0.469 x 0.354) is planned 24% wider than the light
+                # one, which is the whole reason the map is inflated per type.
+                radii[name] = 0.5 * math.hypot(length, width) + 0.06
+            map_yaml = os.path.join(
+                get_package_share_directory("hetero_fleet_bringup"),
+                "maps", "geomap.yaml",
+            )
+            self._traffic = TrafficPlanner(
+                map_yaml, radii, list(self.robots),
+                cell=self.cbs_cell_m, time_limit=self.cbs_time_limit_sec,
+                max_expansions=self.cbs_max_expansions,
+                margin=self.cbs_margin_m, retask_tol=self.cbs_retask_tol_m,
+                logger=self.get_logger(),
+            )
+            self.get_logger().info(
+                f"CBS planner ready: {self._traffic._planner_once().grid.W}x"
+                f"{self._traffic._planner_once().grid.H} cells @ "
+                f"{self.cbs_cell_m:.2f} m, map {map_yaml}"
+            )
+        return self._traffic
+
+    def _route_msg(self, route) -> PathMsg:
+        """A CBS route as a nav_msgs/Path, heading along each segment."""
+        msg = PathMsg()
+        msg.header.frame_id = "map"
+        msg.header.stamp = self.get_clock().now().to_msg()
+        pts = route.waypoints
+        for i, (x, y) in enumerate(pts):
+            j = min(i + 1, len(pts) - 1)
+            yaw = math.atan2(pts[j][1] - pts[i][1], pts[j][0] - pts[i][0]) \
+                if j != i else 0.0
+            ps = PoseStamped()
+            ps.header = msg.header
+            ps.pose.position.x = float(x)
+            ps.pose.position.y = float(y)
+            qx, qy, qz, qw = yaw_to_quaternion(yaw)
+            ps.pose.orientation.x = qx
+            ps.pose.orientation.y = qy
+            ps.pose.orientation.z = qz
+            ps.pose.orientation.w = qw
+            msg.poses.append(ps)
+        return msg
+
+    def _publish_route(self, name: str, route) -> None:
+        pub = self.cbs_plan_pubs.get(name)
+        if pub is not None:
+            pub.publish(self._route_msg(route))
+
+    def _cbs_joint_plan(self, targets):
+        """One immutable snapshot, including every parked robot as an obstacle."""
+        poses = {}
+        for name in self.robots:
+            xy = self._live_xy(name)
+            if xy is None:
+                self.get_logger().error(f"CBS: missing live pose for {name}")
+                return {}
+            poses[name] = (float(xy[0]), float(xy[1]))
+        routes, info = self._traffic_planner().plan(poses, targets)
+        if not routes:
+            self.get_logger().error(f"CBS: no fleet plan: {info}")
+            return {}
+        # A nearby coarse cell is acceptable; large silent target nudges are not.
+        for name, target in targets.items():
+            route = routes.get(name)
+            if not route or not route.timed_waypoints:
+                return {}
+            first, last = route.timed_waypoints[0], route.timed_waypoints[-1]
+            if math.hypot(first[0]-poses[name][0], first[1]-poses[name][1]) > self.cbs_cell_m:
+                self.get_logger().error(f"CBS: {name} start snapped too far")
+                return {}
+            if math.hypot(last[0]-target.x, last[1]-target.y) > self.cbs_cell_m:
+                self.get_logger().error(f"CBS: {name} goal blocked or occupied by another robot")
+                return {}
+            self._publish_route(name, route)
+        self._traffic.commit(routes)
+        self.get_logger().info(
+            f"CBS coordinated: {len(routes)} robots, "
+            f"{info.get('seconds', 0.0)*1000:.0f} ms, "
+            f"waits={sum(route.waited for route in routes.values())}"
+            + (" [conflict-checked prioritized fallback]" if info.get('fallback') else '')
+        )
+        return routes
+
+    def _cbs_separation(self, a, b):
+        radii = self._traffic_planner().radii
+        return radii[a] + radii[b] + self._traffic_planner()._planner_once().sep_margin
+
+    def _send_cbs_step(self, name, points, target, final):
+        """Send one continuous authorized CBS prefix, preserving every corner."""
+        xy = self._live_xy(name)
+        if xy is None:
+            return None, "missing_pose"
+        client = self.follow_clients[name]
+        if not client.wait_for_server(timeout_sec=2.0):
+            return None, "cbs_action_unavailable"
+        goal = FollowPath.Goal()
+        msg = PathMsg()
+        msg.header.frame_id = "map"
+        msg.header.stamp = self.get_clock().now().to_msg()
+        polyline = [(xy[0], xy[1])] + list(points)
+        for index in range(len(polyline)-1):
+            a, b = polyline[index], polyline[index+1]
+            dx, dy = b[0]-a[0], b[1]-a[1]
+            if math.hypot(dx,dy)<1e-9 and index<len(polyline)-2:
+                continue
+            yaw = math.atan2(dy,dx) if math.hypot(dx,dy)>1e-9 else xy[2]
+            steps = max(1, int(math.ceil(math.hypot(dx,dy)/0.025)))
+            for i in range(steps):
+                ps = PoseStamped()
+                ps.header = msg.header
+                ps.pose.position.x = a[0]+dx*i/steps
+                ps.pose.position.y = a[1]+dy*i/steps
+                qx, qy, qz, qw = yaw_to_quaternion(yaw)
+                ps.pose.orientation.x, ps.pose.orientation.y = qx, qy
+                ps.pose.orientation.z, ps.pose.orientation.w = qz, qw
+                msg.poses.append(ps)
+        endpoint = PoseStamped()
+        endpoint.header = msg.header
+        endpoint.pose.position.x, endpoint.pose.position.y = points[-1]
+        yaw = target.yaw if final else yaw
+        qx, qy, qz, qw = yaw_to_quaternion(yaw)
+        endpoint.pose.orientation.x, endpoint.pose.orientation.y = qx, qy
+        endpoint.pose.orientation.z, endpoint.pose.orientation.w = qz, qw
+        msg.poses.append(endpoint)
+        goal.path = msg
+        goal.controller_id = "FollowPath"
+        goal.goal_checker_id = "cbs_final_checker" if final else "cbs_step_checker"
+        goal.progress_checker_id = "progress_checker"
+        future = client.send_goal_async(goal)
+        deadline = time.monotonic()+5.0
+        while not future.done() and time.monotonic()<deadline:
+            time.sleep(.02)
+        if not future.done():
+            # Retain ownership of a late-accepted action and immediately cancel it.
+            def cancel_late(f):
+                handle = f.result()
+                if handle is not None and handle.accepted:
+                    handle.cancel_goal_async()
+            future.add_done_callback(cancel_late)
+            return None, "timeout"
+        handle = future.result()
+        return (handle, None) if handle is not None and handle.accepted else (None, "rejected")
+
+    def _send_leg_goal(self, robot: RobotState, target: Pose2D, tag: str):
+        """CBS mode never bypasses a failed joint plan with independent Nav2."""
+        if self.use_cbs:
+            with self._lock:
+                if self._cbs_executor is None:
+                    self._cbs_executor = CBSExecutor(
+                        self._cbs_joint_plan, self._send_cbs_step, self._live_xy,
+                        self.get_logger(), step_timeout=self.cbs_step_timeout_sec,
+                        separation=self._cbs_separation)
+            self.nav_mode[robot.id] = "cbs"
+            return self._cbs_executor.submit(robot.id, target)
+        handle, err = self._send_goal(robot, target, tag)
+        if handle is not None:
+            self.nav_mode[robot.id] = "nav2"
+        return handle, err
 
     def _send_goal(self, robot: RobotState, target: Pose2D, tag: str):
         """Hand one NavigateToPose goal to Nav2.
@@ -1124,7 +1348,14 @@ class FleetManager(Node):
 
         while not result_future.done():
             time.sleep(0.1)
-            if not self.stall_enabled:
+            if self.route_dirty.get(robot.id):
+                # The fleet was re-planned while this leg was running and the
+                # route this robot is driving is no longer the committed one.
+                # Hand control back to _drive_leg, which re-sends the new
+                # route; this is not a stall and must not burn a recovery.
+                self.route_dirty[robot.id] = False
+                return "retask", False, last_distance
+            if self.use_cbs or not self.stall_enabled:
                 continue
             xy = self._live_xy(robot.id)
             if xy is None:
@@ -1152,6 +1383,48 @@ class FleetManager(Node):
         return math.hypot(xy[0] - target.x, xy[1] - target.y) \
             + self.stall_yaw_weight * abs(dyaw)
 
+    def _short_backoff(self, name):
+        """One bounded collision-checked escape; None means ownership uncertain."""
+        length = getattr(self, "stall_backoff_distance_m", 0.0)
+        now = time.monotonic()
+        if length <= 0 or now-self.last_backoff.get(name, -math.inf) < self.stall_backoff_cooldown_sec:
+            return 0.0
+        client = self.backup_clients[name]
+        if not client.wait_for_server(timeout_sec=1.0):
+            return 0.0
+        self.last_backoff[name] = now
+        goal = BackUp.Goal()
+        goal.target.x = -length
+        goal.speed = self.stall_backoff_speed_mps
+        goal.time_allowance.sec = 4
+        self.get_logger().warn(f"{name}: one short collision-checked backoff, at most {length:.2f} m")
+        traveled = [0.0]
+        def feedback(message):
+            traveled[0] = max(traveled[0], float(message.feedback.distance_traveled))
+        pending = client.send_goal_async(goal, feedback_callback=feedback)
+        deadline = time.monotonic()+3.0
+        while not pending.done() and time.monotonic()<deadline: time.sleep(.02)
+        if not pending.done():
+            def cancel_late(f):
+                h = f.result()
+                if h is not None and h.accepted: h.cancel_goal_async()
+            pending.add_done_callback(cancel_late)
+            return None
+        handle = pending.result()
+        if handle is None or not handle.accepted: return 0.0
+        future = handle.get_result_async()
+        deadline = time.monotonic()+6.0
+        while not future.done() and time.monotonic()<deadline: time.sleep(.02)
+        if not future.done():
+            handle.cancel_goal_async()
+            deadline = time.monotonic()+3.0
+            while not future.done() and time.monotonic()<deadline: time.sleep(.02)
+            if not future.done(): return None
+        future.result()
+        actual = min(length, max(0.0, traveled[0]))
+        self.get_logger().info(f"{name}: backoff ended, traveled {actual:.2f} m; re-plan now")
+        return actual
+
     def _nearest_teammate_m(self, robot_id: str, x: float, y: float) -> float:
         """Distance from (x, y) to the closest other robot, or inf if alone."""
         best = float("inf")
@@ -1163,90 +1436,30 @@ class FleetManager(Node):
                 best = d
         return best
 
-    def _back_off(self, robot: RobotState, attempt: int = 1) -> float:
-        """Reverse a short way to break a standoff; return the metres driven.
-
-        Candidates are behind the robot and slightly off to each side, so the
-        reverse stays inside the corridor instead of angling into a wall, and
-        each one is checked against the static map first - a "recovery" that
-        reverses into furniture just buys a second stall.
-
-        Among the ones that are free, the candidate that ends FARTHEST from the
-        nearest teammate wins. This is the whole point on this map: the usual
-        jam is three or four robots meeting in one 1 m-wide pocket of the ring
-        corridor (dropoff_B and its approach slots are the classic one), and if
-        every one of them reverses by the same rule into the same pocket, the
-        jam is not broken - it is moved. Reversing towards open space is what
-        disperses the cluster.
-
-        `attempt` is the 1-based recovery number for this leg; the retreat
-        grows with it, because a robot that has already backed up and re-planned
-        into the same traffic will not be helped by backing up the same amount
-        again.
-
-        The reverse is given a bounded window. If it does not finish in time we
-        return anyway: the caller re-sends the original goal, which preempts
-        the unfinished reverse, so the worst case is that we re-plan from a
-        different pose - which is the point.
-        """
-        xy = self._live_xy(robot.id)
-        if xy is None:
-            return 0.0
-        x, y, yaw = xy
-        clearance = self.slot_clearance.get(robot.id, 0.45)
-        back = min(
-            self.stall_backoff_m
-            * (1.0 + self.stall_backoff_growth * max(0, attempt - 1)),
-            self.stall_backoff_max_m,
-        )
-
-        tried = []
-        options = []
-        for dyaw, frac in ((0.0, 1.0), (0.45, 1.0), (-0.45, 1.0),
-                           (0.9, 0.7), (-0.9, 0.7)):
-            tx = x - back * frac * math.cos(yaw + dyaw)
-            ty = y - back * frac * math.sin(yaw + dyaw)
-            if not self._slot_is_free(tx, ty, clearance):
-                tried.append(f"({tx:.2f},{ty:.2f}) blocked")
-                continue
-            # Prefer open space; break ties towards the straight reverse so a
-            # robot with nobody near it still behaves predictably.
-            room = self._nearest_teammate_m(robot.id, tx, ty)
-            options.append((room - 0.05 * abs(dyaw), tx, ty))
-        if not options:
-            self.get_logger().warn(
-                f"{robot.id}: nowhere to reverse into ({'; '.join(tried)}) - "
-                f"re-planning from the current pose"
-            )
-            return 0.0
-        options.sort(key=lambda o: -o[0])
-        _, tx, ty = options[0]
-
-        handle, err = self._send_goal(robot, Pose2D(tx, ty, yaw), f"{robot.id}:backoff")
-        if err is not None:
-            self.get_logger().warn(
-                f"{robot.id}: could not send the reverse goal ({err})"
-            )
-            return 0.0
-        future = handle.get_result_async()
-        deadline = time.time() + self.stall_backoff_sec
-        while not future.done() and time.time() < deadline:
-            time.sleep(0.1)
-        moved = math.hypot(tx - x, ty - y)
-        self.get_logger().info(
-            f"{robot.id}: reversing {moved:.2f} m to ({tx:.2f},{ty:.2f}) "
-            f"to break the standoff"
-        )
-        return moved
-
     def _navigate(self, robot: RobotState, target: Pose2D, tag: str):
+        """Drive one leg, and forget the leg's traffic state when it ends.
+
+        The CBS bookkeeping (which leg this robot is executing, and the route
+        committed for it) has to disappear with the leg: a stale target would
+        make the next joint plan route traffic around a destination nobody is
+        going to any more.
+        """
+        try:
+            return self._drive_leg(robot, target, tag)
+        finally:
+            with self._lock:
+                self.leg_target.pop(robot.id, None)
+            if self._traffic is not None:
+                self._traffic.clear(robot.id)
+
+    def _drive_leg(self, robot: RobotState, target: Pose2D, tag: str):
         """Drive to `target`, breaking standoffs along the way.
 
         Returns (success, distance_travelled_m, energy_wh).
 
         A leg is retried up to stall_max_recoveries times: each time the robot
-        stops making progress the current goal is preempted, the robot reverses
-        a short distance, and the same goal is re-sent with a fresh plan. Only
+        stops making progress the current goal is canceled, and the same goal
+        is re-sent from the current pose with a fresh plan. Only
         if it still cannot make headway does the leg fail, which hands the task
         back to the scheduler - the failure path that was already there.
         """
@@ -1256,13 +1469,14 @@ class FleetManager(Node):
         # so the fleet energy/distance totals stay honest.
         extra_dist = 0.0
         recoveries = 0
+        backoff_used = False
 
         while True:
-            handle, err = self._send_goal(robot, target, tag)
+            handle, err = self._send_leg_goal(robot, target, tag)
             if err == "unavailable":
                 if recoveries == 0:
                     self.get_logger().warn(
-                        f"{robot.id}: navigate_to_pose not available for {tag}"
+                        f"{robot.id}: no navigation action server for {tag}"
                     )
                     # Without Nav2 we still want the *scheduling* experiment to
                     # run, so fall back to a kinematic estimate rather than
@@ -1288,6 +1502,16 @@ class FleetManager(Node):
             )
             with self._lock:
                 self.active_goal.pop(robot.id, None)
+
+            if status == "retask":
+                # Our own traffic manager superseded this route. Sending the
+                # next goal preempts the running one, which is exactly what we
+                # want; nothing about the leg has failed.
+                self.get_logger().info(
+                    f"{robot.id}: fleet re-planned on {tag} - taking the new "
+                    f"CBS route"
+                )
+                continue
 
             if stalled and distance <= self.stall_arrive_radius_m:
                 # The robot is standing on the goal; what it has not got is a
@@ -1321,19 +1545,33 @@ class FleetManager(Node):
                     f"from the goal - recovery {recoveries}/"
                     f"{self.stall_max_recoveries}"
                 )
+                # Cancel before retrying or exhausting the recovery budget.
+                try:
+                    cancel_future = handle.cancel_goal_async()
+                    deadline = time.monotonic() + 5.0
+                    while not cancel_future.done() and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    if not cancel_future.done():
+                        self.get_logger().error(f"{robot.id}: cancellation timed out")
+                        return False, 0.0, 0.0
+                except Exception:
+                    return False, 0.0, 0.0
                 if recoveries > self.stall_max_recoveries:
                     self.get_logger().error(
                         f"{robot.id}: still wedged after "
                         f"{self.stall_max_recoveries} recoveries - failing {tag}"
                     )
                     return False, 0.0, 0.0
-                # Preempt the blocked goal before reversing, so Nav2 is not
-                # still planning against it while the reverse runs.
-                try:
-                    handle.cancel_goal_async()
-                except Exception:  # noqa: BLE001 - cancellation is best effort
-                    pass
-                extra_dist += self._back_off(robot, recoveries)
+                if recoveries >= 2 and not backoff_used and getattr(self, "stall_backoff_distance_m", 0.0) > 0:
+                    backoff_used = True
+                    terminal = handle.get_result_async()
+                    deadline = time.monotonic()+3.0
+                    while not terminal.done() and time.monotonic()<deadline: time.sleep(.02)
+                    if not terminal.done(): return False, 0.0, 0.0
+                    escaped = self._short_backoff(robot.id)
+                    if escaped is None: return False, 0.0, 0.0
+                    extra_dist += escaped
+                self.get_logger().info(f"{robot.id}: re-planning from current pose")
                 continue
 
             # 4 == STATUS_SUCCEEDED in action_msgs/GoalStatus
@@ -1742,6 +1980,8 @@ class FleetManager(Node):
                 self.get_logger().warn(f"could not write metrics: {exc}")
 
     def destroy_node(self):
+        if self._cbs_executor is not None:
+            self._cbs_executor.close()
         # Final report on the way out.
         try:
             self._report()

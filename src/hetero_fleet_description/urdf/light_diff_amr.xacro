@@ -2,19 +2,19 @@
 <!-- Lightweight differential-drive AMR, sized for the scanned office map.
 
      SCALE: every dimension below is the warehouse design multiplied by `s`,
-     which is 0.60 here - NOT the 0.70 that MAP_SWAP.md's table still quotes.
-     The code is the source of truth: s=0.41 gives a 0.328 x 0.221 m body
-     (0.344 x 0.271 m including the bumper, wheels included), which is what
-     the controller geometry (wheel_radius 0.0451 / separation 0.246) and
-     tools/measure_footprint.py report. It started at 0.60 and has been
-     shrunk twice since (0.48, now 0.41): the ring corridor's narrowest
-     usable passage is ~1.1 m and every centimetre of robot width is
-     lateral room the controller gets to work with (see MAP_SWAP.md 3). Masses scale with volume (s^3)
+     which is 0.45 here - NOT the 0.70 that MAP_SWAP.md's table still quotes.
+     The code is the source of truth: s=0.45 gives a 0.360 x 0.243 m body
+     (0.378 x 0.297 m including the bumper, wheels included), which is what
+     the controller geometry (wheel_radius 0.0495 / separation 0.270) and
+     tools/measure_footprint.py report. History: it started at 0.60, was
+     shrunk to 0.48 and then 0.41 to fit the narrow corridor, and was scaled
+     back up to 0.45 on 2026-09-28 at the user's request ("make the robots a
+     bit bigger"). Masses scale with volume (s^3)
      and inertias with s^5, so the dynamics stay self-consistent; the shell
      mesh is scaled by the same factor so the visuals match the collision
      geometry.
 
-     The navigation footprint in robot_profiles.yaml (0.344 x 0.271 m) is
+     The navigation footprint in robot_profiles.yaml (0.378 x 0.297 m) is
      this same outline, measured by tools/measure_footprint.py.
 -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="light_diff_amr">
@@ -23,7 +23,7 @@
   <xacro:include filename="$(find hetero_fleet_description)/urdf/common.xacro"/>
   <xacro:property name="controllers_file" value="$(arg controllers_file)"/>
   <xacro:property name="robot_name" value="$(arg robot_name)"/>
-  <xacro:property name="s" value="0.41"/>
+  <xacro:property name="s" value="0.589666813697"/>
   <xacro:property name="base_length" value="${0.80 * s}"/>
   <xacro:property name="base_width" value="${0.54 * s}"/>
   <xacro:property name="base_height" value="${0.22 * s}"/>

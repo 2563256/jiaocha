@@ -1,0 +1,20 @@
+# Manual corrections to the rasterised scan, applied by tools/make_nav2_map.py
+# AFTER every automatic filter (and before the unreachable-pocket fill).
+#
+# A scan is not a CAD model, so a few cells always need a human eye. Keeping
+# them here instead of editing geomap.pgm by hand means the map stays
+# reproducible: rerun the four steps of README §12 and you get this map back.
+#
+# Boxes are world metres, [x0, y0, x1, y1] in the map frame (x east, y north).
+#   erase: force the cells to FREE      - delete something the scan invented,
+#          or a real object the robot drives under/through anyway
+#   fill:  force the cells to OBSTACLE  - close a gap that is not really there
+#
+# Every entry needs its reason, so the next person can re-check it.
+erase:
+  # (2, -11): the scan captured only the top of a piece of furniture here
+  # (geometry at 0.4-1.5 m, just 0.18 m^2 of it comes down to the robot's
+  # height), and its projection leaves a wedge sticking north out of the block
+  # at y = -11.9. The robots pass under it, so it must not be an obstacle.
+  - [0.15, -11.75, 2.25, -10.80]
+fill: []

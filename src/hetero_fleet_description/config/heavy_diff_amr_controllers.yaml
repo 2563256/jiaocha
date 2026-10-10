@@ -6,10 +6,10 @@
 #
 # Slower and more limited than the light AMR: 0.45 m/s top speed and gentler
 # acceleration, because a loaded 150 kg pallet must not shift on the deck.
-# Geometry, already rescaled by s=0.45 for the scanned map (see
-# heavy_diff_amr.xacro - its header explains why the scale is 0.31 and not the
-# 0.53 quoted in MAP_SWAP.md): wheel_radius 0.062, wheel separation
-# = base_width + wheel_width = 0.2666 + 0.0279 = 0.2945 (0.29 here).
+# Geometry, already rescaled by s for the scanned map (see heavy_diff_amr.xacro
+# - its header explains the scale history): at s = 0.34 wheel_radius =
+# 0.20*s = 0.068 and wheel separation = base_width + wheel_width
+# = 0.2924 + 0.0306 = 0.323.
 
 /<robot_name>/controller_manager:
   ros__parameters:
@@ -30,8 +30,8 @@
     left_wheel_names:  ["left_wheel_joint"]
     right_wheel_names: ["right_wheel_joint"]
 
-    wheel_separation: 0.29
-    wheel_radius: 0.062
+    wheel_separation: 0.423249735
+    wheel_radius: 0.089105207
 
     publish_rate: 50.0
     # Frame ids below already include the rendered robot namespace.

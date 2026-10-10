@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import math
+import time
 
 import rclpy
 from geometry_msgs.msg import TransformStamped
@@ -60,9 +61,11 @@ class OmniOdomRelay(Node):
     def pose_callback(self, msg):
         if not msg.transforms:
             return
-        now = self.get_clock().now()
+        # Wall-clock throttling keeps TF available to late subscribers while
+        # Gazebo is paused and also survives simulation-clock resets.
+        now = time.monotonic()
         if self.min_period > 0.0 and self.last_publish is not None:
-            elapsed = (now - self.last_publish).nanoseconds * 1e-9
+            elapsed = now - self.last_publish
             if elapsed < self.min_period:
                 return
         self.last_publish = now

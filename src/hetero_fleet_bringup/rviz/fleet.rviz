@@ -68,6 +68,8 @@ Visualization Manager:
     - Class: rviz_default_plugins/RobotModel
       Enabled: true
       Name: light_1 model
+      Visual Enabled: true
+      Collision Enabled: false
       Description Source: Topic
       Description Topic:
         Depth: 1
@@ -79,6 +81,8 @@ Visualization Manager:
     - Class: rviz_default_plugins/RobotModel
       Enabled: true
       Name: light_2 model
+      Visual Enabled: true
+      Collision Enabled: false
       Description Source: Topic
       Description Topic:
         Depth: 1
@@ -91,6 +95,8 @@ Visualization Manager:
     - Class: rviz_default_plugins/RobotModel
       Enabled: true
       Name: heavy_1 model
+      Visual Enabled: true
+      Collision Enabled: false
       Description Source: Topic
       Description Topic:
         Depth: 1
@@ -103,6 +109,8 @@ Visualization Manager:
     - Class: rviz_default_plugins/RobotModel
       Enabled: true
       Name: omni_1 model
+      Visual Enabled: true
+      Collision Enabled: false
       Description Source: Topic
       Description Topic:
         Depth: 1
@@ -182,6 +190,55 @@ Visualization Manager:
         Value: Lines
       Color: 120; 220; 90
       Alpha: 0.9
+
+    # The CBS routes: what the fleet-level planner decided, before any robot
+    # has driven it. Drawn thicker than the per-robot Nav2 plans above so the
+    # two can be compared at a glance - when they diverge, the local controller
+    # is reacting to something the joint plan did not know about (another
+    # robot that slipped, an obstacle that moved).
+    - Class: rviz_default_plugins/Path
+      Enabled: true
+      Name: light_1 CBS route
+      Topic:
+        Value: /light_1/cbs_plan
+      Line Style:
+        Line Width: 0.09
+        Value: Lines
+      Color: 255; 255; 0
+      Alpha: 0.85
+
+    - Class: rviz_default_plugins/Path
+      Enabled: true
+      Name: light_2 CBS route
+      Topic:
+        Value: /light_2/cbs_plan
+      Line Style:
+        Line Width: 0.09
+        Value: Lines
+      Color: 0; 255; 255
+      Alpha: 0.85
+
+    - Class: rviz_default_plugins/Path
+      Enabled: true
+      Name: heavy_1 CBS route
+      Topic:
+        Value: /heavy_1/cbs_plan
+      Line Style:
+        Line Width: 0.09
+        Value: Lines
+      Color: 255; 0; 255
+      Alpha: 0.85
+
+    - Class: rviz_default_plugins/Path
+      Enabled: true
+      Name: omni_1 CBS route
+      Topic:
+        Value: /omni_1/cbs_plan
+      Line Style:
+        Line Width: 0.09
+        Value: Lines
+      Color: 120; 160; 255
+      Alpha: 0.85
 
     - Class: rviz_default_plugins/Map
       Enabled: true
@@ -269,10 +326,10 @@ Visualization Manager:
     # the robots.
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 17
+      Distance: 55
       Focal Point:
-        X: 2
-        Y: 2
+        X: 3
+        Y: -25
         Z: 0
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05

@@ -1,5 +1,9 @@
 #!/usr/bin/python3
-"""Publish each robot's scan, plus a separate "where the other robots are" scan.
+"""Current behavior: oriented teammate rectangles feed separate dynamic layers
+in both global and local costmaps. The historical rationale below describes
+the earlier local-only circular approximation.
+
+Publish each robot's scan, plus a separate "where the other robots are" scan.
 
 Two topics per robot, and the SPLIT between them is the whole point:
 
@@ -51,6 +55,24 @@ from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 
 
+def rectangle_ray_range(angle, cx, cy, yaw, half_length, half_width):
+    """Intersection distance to an oriented teammate footprint, or infinity."""
+    c, s = math.cos(yaw), math.sin(yaw)
+    ox, oy = -c * cx - s * cy, s * cx - c * cy
+    dx, dy = math.cos(angle - yaw), math.sin(angle - yaw)
+    near, far = 0.0, float("inf")
+    for origin, direction, extent in ((ox, dx, half_length), (oy, dy, half_width)):
+        if abs(direction) < 1e-12:
+            if abs(origin) > extent:
+                return float("inf")
+            continue
+        a, b = (-extent - origin) / direction, (extent - origin) / direction
+        near, far = max(near, min(a, b)), min(far, max(a, b))
+        if near > far:
+            return float("inf")
+    return near if far >= 0.0 else float("inf")
+
+
 class ScanFrameRelay(Node):
     def __init__(self):
         super().__init__("scan_frame_relay")
@@ -86,17 +108,13 @@ class ScanFrameRelay(Node):
             length, width = types[entry["type"]]["footprint"]
             self.robots[name] = {
                 "spawn": (float(sx), float(sy), float(syaw)),
-                "lidar_dx": self.lidar_dx_by_type.get(
-                    entry["type"], self.default_lidar_dx
+                "lidar_dx": types[entry["type"]].get(
+                    "lidar_offset_x", self.lidar_dx_by_type.get(
+                        entry["type"], self.default_lidar_dx
+                    )
                 ),
-                # Inscribed radius, not the half-diagonal: the injected blob
-                # is a keep-out marker, and using the circumscribed radius made
-                # every teammate ~40% fatter than it is. With four robots in a
-                # 26 x 10 m hall that inflated each local costmap into a sea of
-                # lethal cells whenever two of them worked near each other, and
-                # MPPI then found no feasible rollout at all ("Optimizer reset")
-                # - both robots stood still waiting for the other one.
-                "half_diag": 0.5 * min(length, width),
+                "half_length": 0.5 * length,
+                "half_width": 0.5 * width,
                 "pose": None,          # (x, y, yaw) on the map
             }
 
@@ -171,27 +189,24 @@ class ScanFrameRelay(Node):
                 for other, state in self.robots.items():
                     if other == name or state["pose"] is None:
                         continue
-                    ox, oy, _ = state["pose"]
+                    ox, oy, oyaw = state["pose"]
                     wx, wy = ox - ex, oy - ey
                     # The blob is drawn in the EGO robot's lidar frame, so the
                     # offset that comes off is the EGO's, not the teammate's.
                     bx = c * wx + s * wy - self.robots[name]["lidar_dx"]
                     by = -s * wx + c * wy
-                    rng = math.hypot(bx, by)
-                    half = state["half_diag"]
-                    surface = rng - half
-                    if surface > min(self.max_range, out.range_max):
+                    radius = math.hypot(state["half_length"], state["half_width"])
+                    if math.hypot(bx, by) - radius > min(self.max_range, out.range_max):
                         continue
-                    surface = max(surface, out.range_min)
-                    bearing = math.atan2(by, bx)
-                    spread = math.atan2(half, max(rng, half))
-                    i0 = int(round((bearing - spread - out.angle_min) / inc))
-                    i1 = int(round((bearing + spread - out.angle_min) / inc))
-                    spans = [(i0, i1)] if i0 <= i1 else [(i0, n - 1), (0, i1)]
-                    for a, b in spans:
-                        for i in range(max(0, a), min(n - 1, b) + 1):
-                            if out.ranges[i] > surface:
-                                out.ranges[i] = surface
+                    # Test the actual oriented rectangle. Iterating beams also
+                    # handles teammates crossing the -pi/+pi scan boundary.
+                    for i in range(n):
+                        distance = rectangle_ray_range(
+                            out.angle_min + i * inc, bx, by, oyaw - eyaw,
+                            state["half_length"], state["half_width"],
+                        )
+                        if distance <= min(self.max_range, out.range_max):
+                            out.ranges[i] = min(out.ranges[i], max(distance, out.range_min))
         self.obstacle_pubs[name].publish(out)
 
 

@@ -101,7 +101,7 @@ for pattern in ("/dev/shm/sem.fastrtps_*", "/dev/shm/fastrtps_*",
 print(f"    removed {removed} stale FastRTPS shared-memory segment(s)")
 PY
 
-left=$(pgrep -f "hetero_fleet_geomap_ws/instal[l]" | wc -l)
+left=$(pgrep -f "hetero_fleet_geomap123_ws/instal[l]" | wc -l)
 gz_left=$(pgrep -x ruby | wc -l)
 echo "==> remaining workspace processes: $left, gz sim instances: $gz_left"
 echo "==> done"

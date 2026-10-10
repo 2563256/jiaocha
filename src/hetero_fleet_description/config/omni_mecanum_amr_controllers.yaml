@@ -9,10 +9,9 @@
 # needs all four wheel joints plus a wheelbase/track pair rather than a single
 # separation.
 #
-# Geometry from the URDF, already rescaled by s=0.61 for the scanned map (see
-# omni_mecanum_amr.xacro - its header explains why the scale is 0.42 and not the
-# 0.72 quoted in MAP_SWAP.md): wheels at x = +/-0.147, y = +/-0.1617,
-# radius 0.0399.
+# Geometry from the URDF, already rescaled by s for the scanned map (see
+# omni_mecanum_amr.xacro - its header explains the scale history): at s = 0.46
+# the wheels sit at x = +/-0.161, y = +/-0.1771, radius 0.0437.
 # Keep the value below in step with the xacro - it is derived from
 # base_length/base_width/wheel_width there, not hand-picked.
 
@@ -44,11 +43,11 @@
 
     # Jazzy's mecanum controller uses lx + ly, where lx/ly are the
     # center-to-wheel projections on x/y: the wheel joints sit at
-    # x = base_length/2 - 0.10*s = 0.147 and y = base_width/2 + wheel_width/2
-    # = 0.1617, so lx + ly = 0.309.
+    # x = base_length/2 - 0.10*s = 0.161 and y = base_width/2 + wheel_width/2
+    # = 0.1771, so lx + ly = 0.3381.
     kinematics:
-      wheels_radius: 0.040
-      sum_of_robot_center_projection_on_X_Y_axis: 0.309
+      wheels_radius: 0.057263199
+      sum_of_robot_center_projection_on_X_Y_axis: 0.442905296
 
     # Frames already carry the robot namespace in this rendered file.
     tf_frame_prefix_enable: false

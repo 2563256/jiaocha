@@ -31,7 +31,7 @@ what actually keeps the robots inside the building.
 Usage (run after make_nav2_map.py, before make_geomap_world.py):
     python3 tools/make_collision_boxes.py \
         --map src/hetero_fleet_bringup/maps/geomap \
-        --model src/hetero_fleet_gz/models/geomap_colour_noroof/model.sdf
+        --model src/hetero_fleet_gz/models/geomap_combined12_noroof/model.sdf
 """
 
 import argparse
@@ -189,7 +189,7 @@ def main():
     ap.add_argument("--map", default="src/hetero_fleet_bringup/maps/geomap",
                     help="basename of the .pgm/.yaml pair (map_server format)")
     ap.add_argument("--model",
-                    default="src/hetero_fleet_gz/models/geomap_colour_noroof/model.sdf")
+                    default="src/hetero_fleet_gz/models/geomap_combined12_noroof/model.sdf")
     ap.add_argument("--margin", type=float, default=0.30,
                     help="box obstacles within this distance of drivable floor. "
                          "Only the shell around drivable space matters: the "

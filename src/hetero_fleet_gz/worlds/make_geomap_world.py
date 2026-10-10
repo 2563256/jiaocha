@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """Build the fleet world on top of the scanned map.
 
-The source model, vendored at worlds/source/model.sdf (originally the desktop
-`~/Desktop/model.sdf`, model `geomap_final_noroof`) is a *viewer* model: the coloured
-scan with a triangle-mesh collider. It is missing everything a fleet
-simulation needs, and one of the things it does have (mesh collision under the
-default physics engine) does not survive contact with the rest of this
-workspace. This script generates the fleet world from scratch instead of
-editing the user's file, so the original stays untouched and the derivation is
-repeatable:
+The source model, vendored at worlds/source/geomap_combined12_noroof.sdf
+(originally the desktop `~/Desktop/geomap_combined12_noroof.sdf`, model
+`geomap_combined12_noroof`) is a *viewer* model: the coloured scan with a
+triangle-mesh collider. It is missing everything a fleet simulation needs, and
+one of the things it does have (mesh collision) does not survive contact with
+the rest of this workspace. This script generates the fleet world from scratch
+instead of editing the user's file, so the original stays untouched and the
+derivation is repeatable:
 
-  1. Physics with BULLET. The scan's collision geometry is a triangle mesh;
-     DART/ODE segfault on mesh collisions in this Gazebo (that is exactly why
-     the user's own world file pins Bullet - see its comment).
+  1. Physics with DART and NO triangle-mesh collision. The scan's collision
+     geometry is a 297k-face mesh; DART/ODE segfault on mesh collisions in this
+     Gazebo (that is exactly why the user's own world file pins Bullet - see
+     its comment) and Bullet cannot turn a wheeled base on this map. The mesh
+     is replaced by the axis-aligned boxes tools/make_collision_boxes.py
+     derives from the occupancy grid (3.0k of them on this scan).
 
   2. Sensors + scene systems, which the source world lacks. Without the
      sensors system the GPU lidars on the robots never publish a scan and Nav2
@@ -32,88 +35,82 @@ Usage:
 import sys
 from pathlib import Path
 
-MODEL = "geomap_final_noroof"
+MODEL = "geomap_combined12_noroof"
 SDF_VERSION = "1.11"
 
 # Vertical placement. Three numbers, all in metres:
 #
 #   MAP_Z     the scan model is lifted by this much so its floor (which
-#             prepare_map_mesh.py levels to +0.027 m) sits clearly above the
+#             prepare_map_mesh.py levels to z=0; this scan's floor is a single
+#             flat plane, so it lands on exactly 0.000) sits clearly above the
 #             world origin instead of straddling it.
 #   GROUND_Z  the (invisible) plane the robots actually drive on. Keep it just
 #             under the floor's surface: wheels then roll ON the blue floor.
 #   GROUND_VISUAL_DZ  how far DOWN the grey 300x300 plane is drawn. The scan's
-#             floor is bumped by +-0.1 m, so a grey plane level with it wins the
-#             depth test in half the pixels and hides the blue floor completely
-#             (exactly the "can't see the blue floor" symptom). Sinking the
-#             *visual* only means the physics still uses GROUND_Z while the
-#             scan's floor is never covered by anything grey.
+#             floor is still noisy at the centimetre level, so a grey plane
+#             level with it wins the depth test in half the pixels and hides
+#             the blue floor completely (exactly the "can't see the blue floor"
+#             symptom). Sinking the *visual* only means the physics still uses
+#             GROUND_Z while the scan's floor is never covered by anything
+#             grey.
 MAP_Z = 0.10
-# floor surface lands at MAP_Z + 0.027, so put the plane ~1 cm under it
+# The floor surface lands at MAP_Z + 0.000, so the driving plane sits 1.7 cm
+# above it - just clear of the levelled floor's own +-2 cm of scan noise.
 GROUND_Z = MAP_Z + 0.017
 GROUND_VISUAL_DZ = -0.30
 
-# (name, x, y, sx, sy, rgba) - coordinates from tools/pick_zones.py, which
-# verifies every one of them against the occupancy grid for the whole fleet's
-# clearance requirement. They all sit in the same connected aisle, so a task
-# between any pickup and any dropoff is plannable.
+# Physics step. This is the knob that decides whether the window runs at
+# real time, and it is dictated by the COLLIDER COUNT, not by the robots:
+#
+#   * the 26 x 10 m lab map this workspace used to hold produced 1.6k box
+#     colliders; at a 1 ms step that measured window RTF 0.34, so it was moved
+#     to 2.5 ms (400 Hz) and ran at ~1.0.
+#   * this 25 x 84 m building produces 3.0k of them (its shell of obstacles is
+#     ~2x longer), and the cost is close to linear in the box count: measured
+#     on this machine (gz sim 9.6, headless, DART, 4 robots, 5 lidars)
+#       3013 boxes, no robots, 2.5 ms step -> RTF 0.72
+#       3013 boxes, 4 robots, 2.5 ms step -> RTF 0.35
+#       0 boxes   (visual mesh only), 2.5 ms step -> RTF 1.00
+#     so the boxes, not the scan mesh or the sensors, eat the step budget.
+#
+# 5 ms (200 Hz) is the compromise: still 2 physics steps per 100 Hz controller
+# cycle (see the update_rate in hetero_fleet_description/config/*_controllers.yaml),
+# and the fastest thing on the map is a 0.066 m wheel turning at 4.5 rad/s,
+# i.e. 0.0225 rad - 1.5 mm of travel - per step. Raise it to 0.01 if you only
+# care about wall-clock and not about contact fidelity; going the other way
+# (back to 1 ms) needs fewer colliders first: rerun make_collision_boxes.py
+# with a smaller --margin, or --block 2, which is cheaper but fattens every
+# wall by up to 5 cm and can wedge a robot on a path the planner certified.
+PHYSICS_STEP = 0.005
+PHYSICS_RATE = int(round(1.0 / PHYSICS_STEP))  # target steps per second
+PHYSICS_NAME = f"{PHYSICS_STEP * 1000:g}ms"
+
+# (name, x, y, sx, sy, rgba) - candidate coordinates come from
+# tools/pick_zones.py, which chooses them on the occupancy grid the planner
+# will load; every one of them was then re-checked by tools/verify_scene.py
+# (free cell, clearance >= 0.53 m for the widest robot, all ten inside ONE
+# connected region, so a task between any pickup and any dropoff is plannable).
+#
+# Dispersed indoor sites and charging bays.
 ZONES = [
-    # --- work zones: the eastern half of the ring -----------------------
-    # Six pads, alternating pickup / dropoff, strung round the eastern half of
-    # the ring: west-to-east along the +4.2 m arm and back west along the south
-    # corridor. Consecutive pads are 1.9-3.7 m apart, which is loose on purpose
-    # - a pickup and its dropoff used to sit 2.2 m apart, and with four robots
-    # working the same corner of a 1.8 m-wide corridor that was where every jam
-    # in the measured runs happened.
-    #
-    # Nothing is placed in the pinch at x ~ 5.5-6.8 on the south corridor
-    # (clearance drops to 0.6 m there - the narrowest point of the whole ring),
-    # and nothing is placed immediately either side of it: a pad there leaves
-    # only ~0.6 m of lane past a robot parked on it, which is what the measured
-    # run showed when omni_1 sat for 45 s at (7.0, -0.45) - 0.4 m west of
-    # dropoff_A, waiting for the pinch to clear. dropoff_A therefore sits at
-    # x = 8.1, where the lane past it is 1.1 m.
-    #
-    # Nothing goes in the EAST CONNECTOR either (x ~ 11.6-12.4, y -0.3..4.2).
-    # It is the ring's only north-south link at that end, and dropoff_C sat in
-    # the middle of it at (12.05, 2.40). On a measured run that one choice
-    # accounted for 25 of the fleet's 42 stall events: a robot working there
-    # closes the corridor, every north-south trip has to meet it head on, and
-    # the meeting turns into a standoff. It now sits on the north arm at
-    # (11.0, 4.22), which leaves the connector clear.
-    ("pickup_A",  10.60,  -0.43, 0.6, 0.6, "0.10 0.85 0.20 0.55"),
-    ("pickup_B",   1.70,   4.22, 0.6, 0.6, "0.10 0.85 0.20 0.55"),
-    ("pickup_C",   9.10,   4.22, 0.6, 0.6, "0.10 0.85 0.20 0.55"),
-    ("dropoff_A",   8.10,  -0.43, 0.6, 0.6, "0.15 0.35 0.90 0.55"),
-    ("dropoff_B",  5.40,   4.22, 0.6, 0.6, "0.15 0.35 0.90 0.55"),
-    ("dropoff_C", 11.00,   4.22, 0.6, 0.6, "0.15 0.35 0.90 0.55"),
-    # --- the charging station: a row against the south wall --------------
-    # One charger per robot: every vehicle's spawn pose IS its charger (see
-    # robot_profiles.yaml) and it drives back here when the fleet runs out of
-    # work, so a fleet of four needs four bays.
-    #
-    # They are parked nose-east in a 1.5 m row against the SOUTH WALL of the
-    # ring's south corridor, just west of the pinch at x ~ 5.5-6.8. Three
-    # things decided the spot:
-    #
-    #   * the corridor there is 2.2-2.4 m wide, so the row still leaves
-    #     >= 1.0 m of travel lane north of a parked robot. Every bay was
-    #     checked for exactly that in the occupancy grid (see below) - a
-    #     charging row that blocks the ring is worse than no charging row.
-    #   * the bays are 1.5 m apart, i.e. four times the widest robot's width,
-    #     so each one can pull straight out east or west without shunting its
-    #     neighbour, unlike the nose-to-tail arrangement this replaced.
-    #   * east of the pinch there is only 3.2 m of wall clear enough for a
-    #     row, which fits three robots, not four.
-    #
-    # The y values follow the wall rather than forming a perfectly straight
-    # line, because the wall does not: it steps 0.2 m between x = 1.2 and 2.7.
-    # tools/verify_scene.py checks every one of them (0.70-0.72 m clearance;
-    # the widest robot needs 0.53 m).
-    ("charger_A",  -0.30,  -0.75, 0.5, 0.5, "0.95 0.80 0.10 0.55"),
-    ("charger_B",   1.20,  -0.95, 0.5, 0.5, "0.95 0.80 0.10 0.55"),
-    ("charger_C",   2.70,  -0.85, 0.5, 0.5, "0.95 0.80 0.10 0.55"),
-    ("charger_D",   4.20,  -0.85, 0.5, 0.5, "0.95 0.80 0.10 0.55"),
+    ('pickup_A', 13.00, -30.00, 0.6, 0.6, '0.10 0.85 0.20 0.55'),
+    ('pickup_B', 2.97, -30.25, 0.6, 0.6, '0.10 0.85 0.20 0.55'),
+    ('pickup_C', 9.00, -53.50, 0.6, 0.6, '0.10 0.85 0.20 0.55'),
+    ('pickup_D', 10.00, -33.80, 0.6, 0.6, '0.10 0.85 0.20 0.55'),
+    ('pickup_E', 5.00, -67.00, 0.6, 0.6, '0.10 0.85 0.20 0.55'),
+    ('dropoff_A', 8.00, -25.60, 0.6, 0.6, '0.15 0.35 0.90 0.55'),
+    ('dropoff_B', 8.00, -43.60, 0.6, 0.6, '0.15 0.35 0.90 0.55'),
+    ('dropoff_C', 10.22, -37.50, 0.6, 0.6, '0.15 0.35 0.90 0.55'),
+    ('dropoff_D', 10.20, -49.20, 0.6, 0.6, '0.15 0.35 0.90 0.55'),
+    ('dropoff_E', 6.00, -70.00, 0.6, 0.6, '0.15 0.35 0.90 0.55'),
+    # North-room sites: tasks must require light_payload.
+    ('pickup_F', 5.00, -17.50, 0.6, 0.6, '0.10 0.85 0.20 0.55'),
+    ('pickup_G', 12.00, -12.50, 0.6, 0.6, '0.10 0.85 0.20 0.55'),
+    ('dropoff_F', 10.00, -21.00, 0.6, 0.6, '0.15 0.35 0.90 0.55'),
+    ('charger_A', 2.00, -11.50, 0.5, 0.5, '0.95 0.80 0.10 0.55'),
+    ('charger_B', 2.00, -21.50, 0.5, 0.5, '0.95 0.80 0.10 0.55'),
+    ('charger_C', 2.00, -38.00, 0.5, 0.5, '0.95 0.80 0.10 0.55'),
+    ('charger_D', 2.00, -69.50, 0.5, 0.5, '0.95 0.80 0.10 0.55'),
 ]
 
 HEAD = f"""<?xml version='1.0'?>
@@ -132,16 +129,17 @@ HEAD = f"""<?xml version='1.0'?>
          the engine is the variable, not the robot model.
 
          The mesh collision is gone: tools/make_collision_boxes.py now turns
-         the Nav2 occupancy grid into ~1.6k axis-aligned box colliders, which
+         the Nav2 occupancy grid into 3.0k axis-aligned box colliders, which
          DART handles natively (and which match the costmap cell for cell).
-         See that script's docstring for the full story.
+         See that script's docstring for the full story, and PHYSICS_STEP
+         below for what that many colliders costs.
 
          If you ever regenerate the map, keep the order:
            prepare_map_mesh.py -> make_nav2_map.py -> make_collision_boxes.py
            -> make_geomap_world.py -->
     <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics">
       <engine><filename>gz-physics-dartsim-plugin</filename></engine>
-      <max_step_size>0.0025</max_step_size>
+      <max_step_size>{PHYSICS_STEP}</max_step_size>
       <real_time_factor>1.0</real_time_factor>
     </plugin>
     <plugin filename="gz-sim-user-commands-system"
@@ -161,19 +159,11 @@ HEAD = f"""<?xml version='1.0'?>
     </plugin>
     <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
 
-    <!-- 2.5 ms steps (400 Hz), not the usual 1 ms.
-
-         DART has to test every robot shape against ~1.6k map colliders on
-         every step, and at 1 ms that costs enough to hold the whole simulation
-         at ~0.35x real time (measured: window RTF 0.34 with the boxes, 1.00
-         without). Nothing here needs 1 kHz - the fastest thing on the map is a
-         0.066 m wheel turning at 4.5 rad/s (0.011 rad per 2.5 ms step) and the
-         controllers only run at 100 Hz. 400 Hz physics keeps every controller
-         fed and brings the window RTF back to ~1. -->
-    <physics name='2p5ms' type='ignored'>
-      <max_step_size>0.0025</max_step_size>
+    <!-- 5 ms steps (200 Hz), not the usual 1 ms - see PHYSICS_STEP. -->
+    <physics name='{PHYSICS_NAME}' type='ignored'>
+      <max_step_size>{PHYSICS_STEP}</max_step_size>
       <real_time_factor>1</real_time_factor>
-      <real_time_update_rate>400</real_time_update_rate>
+      <real_time_update_rate>{PHYSICS_RATE}</real_time_update_rate>
     </physics>
     <gravity>0 0 -9.8</gravity>
 
@@ -256,7 +246,7 @@ def main() -> int:
     print(f"wrote {out}")
     print(f"  map model   : model://{MODEL} (visual + box colliders from the "
           f"occupancy grid)")
-    print(f"  scan model   : z = {MAP_Z}  (floor lands at ~{MAP_Z + 0.027:.3f} m)")
+    print(f"  scan model   : z = {MAP_Z}  (floor lands at ~{MAP_Z:.3f} m)")
     print(f"  driving plane: z = {GROUND_Z} (visual sunk {GROUND_VISUAL_DZ})")
     print(f"  zones       : {len(ZONES)} markers")
     return 0

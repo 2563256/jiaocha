@@ -7,9 +7,13 @@ Output: a model directory with
   meshes/<name>.obj            visual mesh, copied line-for-line except for the
                                vertex positions, so the baked colour atlas and
                                its UVs survive untouched
-  meshes/<name>_collision.obj  the same surface with the FLOOR REMOVED, so the
-                               robots ride the world's flat ground plane
-                               instead of the noisy scanned floor
+  meshes/<name>_collision.obj  the same surface reduced to the band the robots
+                               actually collide with: the FLOOR REMOVED (so
+                               they ride the world's flat ground plane instead
+                               of the noisy scanned floor) and everything that
+                               only exists ABOVE them removed too (door
+                               lintels, beams, ducts - a top-down projection
+                               of those seals the doorway they hang over)
   model.sdf / model.config     visual only, no pose (the level transform is
                                baked into the vertices)
 
@@ -76,9 +80,10 @@ def write_visual(dst, lines, level, header):
     return out
 
 
-def write_collision(dst, V, F, header, keep_above=0.80):
-    """Keep only the structure a robot cannot drive under: walls and furniture
-    that reach above `keep_above` metres.
+def write_collision(dst, V, F, header, keep_above=0.80, drop_above=1.50):
+    """Keep only the structure a robot cannot drive under or through: walls and
+    furniture that reach above `keep_above` metres but are not entirely above
+    `drop_above` metres.
 
     The first version of this filter only removed the floor, and the resulting
     world was unusable: the scan of a lab ring corridor is full of chairs,
@@ -92,6 +97,34 @@ def write_collision(dst, V, F, header, keep_above=0.80):
     construction: what the map calls free floor really is drivable, and low
     clutter stays visible (the visual mesh is untouched) but no longer blocks
     the way.
+
+    `drop_above` is the other end of the same band, and it exists because a
+    top-down projection cannot tell a wall from a door header. Anything whose
+    LOWEST point is above the fleet - door lintels, transoms, beams, ducts,
+    signboards - projects onto the floor exactly like a wall and seals the
+    doorway it hangs over. Measured on geomap_combined12_noroof, dropping the
+    faces that live entirely above 2.0 m opens 42.8 m^2 of floor and reconnects
+    135.5 m^2 to the main region (one 106 m^2 wing behind a 1.40 m wide
+    doorway), while **blocking nothing that was free before** - the filter only
+    ever removes obstacles, so it cannot make the map stricter than the room in
+    a way that traps a robot.
+
+    WHERE TO PUT IT: not at the robot's height. The scan of this building
+    captures some furniture as a top surface only - the workbench at
+    x 5..10, y -31..-32 has its top at 1.5-2.4 m and almost no geometry below
+    it - so a threshold of 1.5 m deletes the whole bench from the map. Scan the
+    value against the two things that matter:
+
+        drop_above   workbench box   free area   largest region   doorway
+          off            7.55 m2      717.4 m2      541.1 m2      shut
+          1.5            4.05 m2      814.0 m2      714.1 m2      open
+          2.0            6.03 m2      760.2 m2      669.6 m2      open
+          2.2            6.03 m2      750.4 m2      617.0 m2      shut
+
+    2.0 m is the value this map ships with: it keeps every piece of furniture
+    that has any geometry below 2 m (the bench included) and only removes what
+    hangs above head height. `tools/map_defects.py --doorway` prints the same
+    trade-off for any new scan.
     """
     area, nz, _ = mc.face_geometry(V, F)
     tri = V[F]
@@ -104,7 +137,9 @@ def write_collision(dst, V, F, header, keep_above=0.80):
     # the real fix is to extrude the kept faces down to z=0 (see MAP_SWAP.md
     # 6.0); until then the safe direction is "map stricter than physics".
     low = tri[:, :, 2].max(axis=1) <= keep_above
-    keep = F[~low]
+    high = tri[:, :, 2].min(axis=1) >= drop_above
+    drop = low | high
+    keep = F[~drop]
     removed_area = float(area[low].sum())
 
     # Deduplicate vertices so the collision file stays a sensible size.
@@ -116,6 +151,8 @@ def write_collision(dst, V, F, header, keep_above=0.80):
         "faces_kept": int(len(new_faces)),
         "faces_dropped_below": int(low.sum()),
         "area_dropped": removed_area,
+        "faces_dropped_above": int(high.sum()),
+        "area_dropped_above": float(area[high].sum()),
         "verts_kept": int(len(uniq)),
     }
 
@@ -124,12 +161,21 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("src_obj")
     ap.add_argument("out_dir", help="model directory to create")
-    ap.add_argument("--name", default="geomap_colour_noroof")
+    ap.add_argument("--name", default="geomap_combined12_noroof")
     ap.add_argument("--keep-above", type=float, default=0.80,
                     help="only geometry reaching above this height (floor "
                          "relative, measured after levelling) stays in the "
                          "collision mesh; everything lower - floor, tape, "
                          "chairs, boxes - is visual-only")
+    ap.add_argument("--drop-above", type=float, default=2.00,
+                    help="and only geometry that also reaches BELOW this "
+                         "height: a face whose lowest point is above it (door "
+                         "lintels, beams, ducts, signs) hangs over the robots "
+                         "and must not be projected onto the floor, or it "
+                         "seals the doorway it hangs over. Not the robot's "
+                         "height: the scan records some furniture as a top "
+                         "surface only (see the docstring), so too low a value "
+                         "deletes benches. 0 disables the filter")
     a = ap.parse_args()
 
     src = Path(a.src_obj)
@@ -161,7 +207,9 @@ def main():
     levelled = mc.apply_level(V, level)
     col = out / "meshes" / f"{a.name}_collision.obj"
     cstats = write_collision(col, levelled, F, f"collision {a.name}",
-                             keep_above=a.keep_above)
+                             keep_above=a.keep_above,
+                             drop_above=(a.drop_above if a.drop_above > 0
+                                         else float("inf")))
     print(f"wrote {col} ({col.stat().st_size/1e6:.1f} MB)")
     print("  collision: " + ", ".join(f"{k}={v}" for k, v in cstats.items()))
 

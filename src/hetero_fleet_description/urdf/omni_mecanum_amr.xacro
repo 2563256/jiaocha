@@ -1,17 +1,18 @@
 <?xml version="1.0"?>
 <!-- Mecanum AMR for precise lateral docking.
 
-     SCALE: the warehouse design times `s`, which is 0.42 here. The code is the
-     source of truth: s=0.42 gives a 0.378 x 0.294 m body (0.403 x 0.353 m
+     SCALE: the warehouse design times `s`, which is 0.46 here. The code is the
+     source of truth: s=0.46 gives a 0.414 x 0.322 m body (0.442 x 0.386 m
      including the bumper, wheels included), and the controller geometry in
-     omni_mecanum_amr_controllers.yaml (wheels_radius 0.0399, wheel joints at
-     x = +/-0.147, y = +/-0.1617) was derived from exactly that. It started at
-     0.61 and has been shrunk twice since (0.49, now 0.42); see the note in
-     light_diff_amr.xacro. Masses scale as s^3, inertias as s^5, the shell
+     omni_mecanum_amr_controllers.yaml (wheels_radius 0.0437, wheel joints at
+     x = +/-0.161, y = +/-0.177) was derived from exactly that. It started at
+     0.61, was shrunk twice (0.49, then 0.42), and was scaled back up to 0.46
+     on 2026-09-28; see the note in light_diff_amr.xacro.
+     Masses scale as s^3, inertias as s^5, the shell
      mesh by s. The mecanum friction model - which is what makes this robot the
      only one that can strafe - is unchanged; only its dimensions move.
 
-     The navigation footprint in robot_profiles.yaml (0.403 x 0.353 m) is
+     The navigation footprint in robot_profiles.yaml (0.442 x 0.386 m) is
      this same outline, measured by tools/measure_footprint.py.
 -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="omni_mecanum_amr">
@@ -20,7 +21,7 @@
   <xacro:include filename="$(find hetero_fleet_description)/urdf/common.xacro"/>
   <xacro:property name="controllers_file" value="$(arg controllers_file)"/>
   <xacro:property name="robot_name" value="$(arg robot_name)"/>
-  <xacro:property name="s" value="0.42"/>
+  <xacro:property name="s" value="0.602770520669"/>
   <xacro:property name="base_length" value="${0.90 * s}"/>
   <xacro:property name="base_width" value="${0.70 * s}"/>
   <xacro:property name="base_height" value="${0.24 * s}"/>

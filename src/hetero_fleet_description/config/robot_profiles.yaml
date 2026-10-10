@@ -4,19 +4,23 @@
 # "heavy AMR is slower / wider / can carry pallets" story is defined in exactly
 # one place instead of being duplicated into YAML and Python.
 #
-# SIZES. This fleet runs on a scanned indoor map (geomap_colour_noroof), not on
-# the warehouse world, and the scan's drivable area is one aisle roughly
-# 14 m x 2.5-4 m between furniture and partitions - and its narrowest usable
-# passage is only ~1.1 m. The vehicles are therefore scaled down from the
-# warehouse design by 0.31-0.42 so that robot + costmap inflation still leaves
-# lateral room in that passage (two earlier cuts, 0.45-0.61 and 0.36-0.49,
-# technically fit but left too little margin: MPPI reported "Optimizer fail to
-# compute path" in every bend and the fleet jammed on meeting another robot).
+# SIZES. This fleet runs on a scanned indoor map
+# (geomap_combined12_noroof: a 25 x 84 m building whose drivable space is a
+# main corridor ~3 m wide with rooms hanging off its east side), not on the
+# warehouse world. The vehicles are scaled down from the warehouse design by
+# 0.34-0.46 so that robot + costmap inflation still leaves lateral room in a
+# corridor that narrows to ~1.1 m at the doorways (two earlier cuts,
+# 0.45-0.61 and 0.36-0.49, technically fit but left too little margin: MPPI
+# reported "Optimizer fail to compute path" in every bend and the fleet jammed
+# on meeting another robot). On 2026-09-28 the whole fleet was scaled back UP
+# by 10% (0.41/0.42/0.31 -> 0.45/0.46/0.34) at the user's request; the corridor
+# has ~1.0-1.65 m of clearance at the working points, so the extra width still
+# fits everywhere verify_scene.py checks.
 #
 #   type     warehouse      URDF body     footprint       scale   inflation
-#   light    0.80 x 0.54    0.328 x 0.221  0.344 x 0.271   0.41    0.17
-#   omni     0.90 x 0.70    0.378 x 0.294  0.403 x 0.353   0.42    0.21
-#   heavy    1.32 x 0.86    0.409 x 0.267  0.428 x 0.322   0.31    0.20
+#   light    0.80 x 0.54    0.360 x 0.243  0.378 x 0.297   0.45    0.35
+#   omni     0.90 x 0.70    0.414 x 0.322  0.442 x 0.386   0.46    0.35
+#   heavy    1.32 x 0.86    0.449 x 0.292  0.469 x 0.354   0.34    0.35
 #
 # The "scale" column is what the .xacro files actually use (MAP_SWAP.md's table
 # still quotes 0.70 / 0.72 / 0.53 - the code wins). "URDF body" is base_length x
@@ -79,27 +83,27 @@
 # The four bays are the four charger markers in the world (make_geomap_world.py
 # ZONES). There is one per robot: two robots sharing a bay would be spawned on
 # top of each other, and would both drive back to the same coordinate. All four
-# sit in a 1.5 m row against the south wall of the ring's south corridor, in
-# the same connected drivable region as the pickup/dropoff zones
-# (tools/verify_scene.py checks both claims). See make_geomap_world.py for why
-# that stretch and not the dead-end west arm.
+# sit in a 1.7 m row at the NORTH end of the main corridor (the widest part of
+# it, 1.0-1.5 m clearance per bay), in the same connected drivable region as
+# the pickup/dropoff zones (tools/verify_scene.py checks both claims). See
+# make_geomap_world.py for why that room and not the branch rooms to the east.
 fleet:
   - name: light_1
     type: light_diff_amr
-    charger: [-0.30, -0.75, 0.0]    # charger_A, west end of the row
-    spawn:   [-0.30, -0.75, 0.0]
+    charger: [2.00, -11.50, 0.0]
+    spawn:   [2.00, -11.50, 0.0]
   - name: light_2
     type: light_diff_amr
-    charger: [1.20, -0.95, 0.0]     # charger_B
-    spawn:   [1.20, -0.95, 0.0]
+    charger: [2.00, -21.50, 0.0]
+    spawn:   [2.00, -21.50, 0.0]
   - name: heavy_1
     type: heavy_diff_amr
-    charger: [2.70, -0.85, 0.0]     # charger_C
-    spawn:   [2.70, -0.85, 0.0]
+    charger: [2.00, -38.00, 0.0]
+    spawn:   [2.00, -38.00, 0.0]
   - name: omni_1
     type: omni_mecanum_amr
-    charger: [4.20, -0.85, 0.0]     # charger_D, east end of the row
-    spawn:   [4.20, -0.85, 0.0]
+    charger: [2.00, -69.50, 0.0]
+    spawn:   [2.00, -69.50, 0.0]
 
 robot_types:
 
@@ -107,17 +111,18 @@ robot_types:
     description: "Light differential-drive AMR for narrow aisles"
     kinematics: diff            # diff | mecanum
     urdf: light_diff_amr.xacro
+    lidar_offset_x: 0.082553354   # base-to-lidar offset, matches enlarged URDF
     controllers: light_diff_amr_controllers.yaml
 
     max_speed: 0.70             # m/s
     max_accel: 1.0              # m/s^2
     max_omega: 1.5              # rad/s
     payload_kg: 20.0
-    footprint: [0.344, 0.271]   # length x width, metres (true collision outline)
+    footprint: [0.495321, 0.389181]   # length x width, metres (true collision outline)
     # Mirrors the costmap inflation in hetero_fleet_bringup/config/
     # nav2_params_light.yaml - keep the two numbers equal. tools/pick_zones.py
     # uses this to decide which floor cells the robot can plan through.
-    inflation_radius: 0.35      # mirrors nav2_params_light.yaml
+    inflation_radius: 0.50      # mirrors nav2_params_light.yaml
     battery_capacity_wh: 480.0
 
     capabilities: [light_payload, narrow_aisle]
@@ -131,14 +136,15 @@ robot_types:
     description: "Heavy differential-drive AMR for pallet transport"
     kinematics: diff
     urdf: heavy_diff_amr.xacro
+    lidar_offset_x: 0.124747290   # base-to-lidar offset, matches enlarged URDF
     controllers: heavy_diff_amr_controllers.yaml
 
     max_speed: 0.45
     max_accel: 0.5
     max_omega: 0.8
     payload_kg: 150.0
-    footprint: [0.428, 0.322]
-    inflation_radius: 0.35      # mirrors nav2_params_heavy.yaml
+    footprint: [0.614826, 0.463348]
+    inflation_radius: 0.50      # mirrors nav2_params_heavy.yaml
     battery_capacity_wh: 1200.0
 
     capabilities: [heavy_payload]
@@ -150,6 +156,7 @@ robot_types:
     description: "Mecanum AMR for precise lateral docking"
     kinematics: mecanum
     urdf: omni_mecanum_amr.xacro
+    lidar_offset_x: 0.108498694   # base-to-lidar offset, matches enlarged URDF
     controllers: omni_mecanum_amr_controllers.yaml
 
     max_speed: 0.55
@@ -160,8 +167,8 @@ robot_types:
     # required_capability: heavy_payload - those are gated by the capability
     # list below, not by payload.
     payload_kg: 90.0
-    footprint: [0.403, 0.353]
-    inflation_radius: 0.35      # mirrors nav2_params_omni.yaml
+    footprint: [0.578660, 0.506328]
+    inflation_radius: 0.50      # mirrors nav2_params_omni.yaml
     battery_capacity_wh: 640.0
 
     capabilities: [precise_docking, omnidirectional]

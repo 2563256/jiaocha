@@ -44,7 +44,9 @@ def xy_of(r, c, meta):
 
 
 def clearance_field(mapdir, res, z_limit, cover_close, structure_close,
-                    smooth=1, structure_dilate=0, min_width=0.60):
+                    smooth=1, structure_dilate=0, min_width=0.60,
+                    fill_pits=0.15, fill_pockets=0.50, fill_unreachable=0.0,
+                    fill_notches=0.0, edits=None, free_floating=False):
     """Clearance (metres) to the nearest obstacle, on the Nav2 map's own grid.
 
     Delegates to make_nav2_map.build_map, so the spots this script picks are
@@ -56,6 +58,12 @@ def clearance_field(mapdir, res, z_limit, cover_close, structure_close,
                                    smooth=smooth,
                                    structure_dilate=structure_dilate,
                                    min_width=min_width,
+                                   fill_pits=fill_pits,
+                                   fill_pockets=fill_pockets,
+                                   fill_unreachable=fill_unreachable,
+                                   fill_notches=fill_notches,
+                                   edits=edits,
+                                   free_floating=free_floating,
                                    verbose=False)
     dist = ndimage.distance_transform_edt(~occupied) * res
     return dist, meta
@@ -64,9 +72,9 @@ def clearance_field(mapdir, res, z_limit, cover_close, structure_close,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("profiles", help="robot_profiles.yaml (for the footprints)")
-    ap.add_argument("--seed", nargs=2, type=float, default=[-0.01, 0.30],
+    ap.add_argument("--seed", nargs=2, type=float, default=[-1.53, -39.65],
                     help="a point known to be in the main drivable area")
-    ap.add_argument("--model-name", default="geomap_final_noroof",
+    ap.add_argument("--model-name", default="geomap_combined12_noroof",
                     help="model directory under src/hetero_fleet_gz/models/")
     ap.add_argument("--res", type=float, default=0.05)
     ap.add_argument("--z-limit", type=float, default=None,
@@ -81,6 +89,16 @@ def main():
                     help="must match make_nav2_map.py's --structure-dilate")
     ap.add_argument("--min-width", type=float, default=0.60,
                     help="must match make_nav2_map.py's --min-width")
+    ap.add_argument("--fill-pits", type=float, default=0.15,
+                    help="must match make_nav2_map.py's --fill-pits")
+    ap.add_argument("--fill-pockets", type=float, default=0.50,
+                    help="must match make_nav2_map.py's --fill-pockets")
+    ap.add_argument("--fill-unreachable", type=float, default=0.0,
+                    help="must match make_nav2_map.py's --fill-unreachable")
+    ap.add_argument("--fill-notches", type=float, default=0.0,
+                    help="must match make_nav2_map.py's --fill-notches")
+    ap.add_argument("--free-floating", action="store_true",
+                    help="must match make_nav2_map.py's --free-floating")
     ap.add_argument("--spacing", type=float, default=1.6,
                     help="minimum distance between chosen spots")
     ap.add_argument("--spot-margin", type=float, default=0.15,
@@ -122,9 +140,16 @@ def main():
         need = max(need, inscribed + inflation)
     print(f"worst-case clearance requirement: {need:.2f} m\n")
 
+    edits_path = tree / "src/hetero_fleet_bringup/maps/map_edits.yaml"
+    edits = None
+    if edits_path.exists():
+        edits = yaml.safe_load(edits_path.read_text()) or {}
+
     dist, meta = clearance_field(mapdir, a.res, a.z_limit,
                                  a.cover_close, a.structure_close, a.smooth,
-                                 a.structure_dilate, a.min_width)
+                                 a.structure_dilate, a.min_width,
+                                 a.fill_pits, a.fill_pockets, a.fill_unreachable,
+                                 a.fill_notches, edits, a.free_floating)
     x0, y0, W, H = meta["xmin"], meta["ymin"], meta["W"], meta["H"]
     passable = dist >= need
     lab, n = ndimage.label(passable)

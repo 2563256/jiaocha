@@ -13,6 +13,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -29,6 +30,7 @@ def generate_launch_description():
                 description="Begin replaying tasks_file immediately",
             ),
             DeclareLaunchArgument("task_interval_sec", default_value="8.0"),
+            DeclareLaunchArgument("use_cbs", default_value="false"),
             DeclareLaunchArgument("use_sim_time", default_value="true"),
             DeclareLaunchArgument(
                 "metrics_dir",
@@ -46,6 +48,7 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
+                        "use_cbs": ParameterValue(LaunchConfiguration("use_cbs"), value_type=bool),
                         "tasks_file": LaunchConfiguration("tasks_file"),
                         "autostart_tasks": LaunchConfiguration("autostart_tasks"),
                         "task_interval_sec": LaunchConfiguration("task_interval_sec"),

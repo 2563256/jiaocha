@@ -64,6 +64,7 @@ def render_params(src_path, robot_name, dst_dir, kind):
     with open(src_path) as f:
         text = f.read()
     text = text.replace("<robot_name>", robot_name)
+    text = text.replace("<bringup_share>", get_package_share_directory("hetero_fleet_bringup"))
     body = yaml.safe_load(text)
 
     # Re-key every top-level section as /<robot_name>/<section>.
