@@ -35,6 +35,7 @@ from __future__ import annotations
 import math
 import os
 import threading
+import copy
 import time
 
 import rclpy
@@ -43,6 +44,7 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Pose2D as Pose2DMsg
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import BackUp, FollowPath, NavigateToPose
+from std_msgs.msg import Bool
 from nav_msgs.msg import Odometry, Path as PathMsg
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -326,7 +328,7 @@ class FleetManager(Node):
                     f"so the robot will not dock where the charger marker is"
                 )
             length, width = t["footprint"]
-            self.slot_clearance[entry["name"]] = 0.5 * math.hypot(length, width)
+            self.slot_clearance[entry["name"]] = 0.5 * math.hypot(length, width) + float(t.get("footprint_padding", 0.0))
             self.robots[entry["name"]] = RobotState(
                 id=entry["name"],
                 type=entry["type"],
@@ -338,6 +340,16 @@ class FleetManager(Node):
                 capabilities=list(t["capabilities"]),
                 wh_per_meter_empty=t["wh_per_meter_empty"],
                 wh_per_meter_kg=t["wh_per_meter_kg"],
+            )
+
+        self.locomotion_health = {entry["name"]: (False, 0.0)
+                                  for entry in self.fleet_cfg
+                                  if self.types[entry["type"]]["kinematics"] == "legged"}
+        for name in self.locomotion_health:
+            self.create_subscription(
+                Bool, f"/{name}/locomotion_ready",
+                lambda msg, n=name: self.locomotion_health.__setitem__(n, (msg.data, self._now())),
+                10, callback_group=self.cb_group,
             )
 
         self.tasks: dict[str, Task] = {}
@@ -431,6 +443,7 @@ class FleetManager(Node):
         # once (task arrival + robot idle), and double-assignment is the classic
         # bug in this kind of node.
         self._lock = threading.Lock()
+        self._metrics_io_lock = threading.Lock()
 
         # --- stall watchdog tuning -----------------------------------------
         self.stall_timeout_sec = float(
@@ -642,6 +655,10 @@ class FleetManager(Node):
                 y = point.y + dy * spacing
                 if not self._slot_is_free(x, y, clearance):
                     continue
+                if any(other != robot.id and math.hypot(x-pose[0], y-pose[1])
+                       < clearance + self.slot_clearance.get(other, .45) + .08
+                       for other, pose in self.live_pose.items()):
+                    continue
                 taken[slot] = robot.id
                 if slot == 0:
                     return point
@@ -820,6 +837,8 @@ class FleetManager(Node):
                 free = [
                     r for r in self.robots.values()
                     if r.status == RobotStatus.IDLE
+                    and self._locomotion_available(r.id, now)
+                    and (r.type != "g1_humanoid" or (now > 0 and self.nav_clients[r.id].server_is_ready()))
                 ]
                 if not free:
                     break
@@ -930,6 +949,8 @@ class FleetManager(Node):
                 robot.current_task_id = ""
                 robot.busy_until_sec = 0.0
 
+            # Persist and publish completion without waiting for sim timers.
+            self._sync_task_outputs()
             self.get_logger().info(
                 f"COMPLETED {task.id} by {robot.id} in "
                 f"{task.completed_at_sec - started:.1f}s, "
@@ -964,8 +985,8 @@ class FleetManager(Node):
     def _work_remains(self) -> bool:
         """True while the fleet still has something it could be doing.
 
-        Only tasks some robot can actually serve count. demo_10 contains a
-        deliberately impossible one (200 kg against a 150 kg rating); it sits
+        Only tasks some robot can actually serve count. An over-capacity
+        task (for example 200 kg against a 150 kg rating) sits
         in the pending queue for ever, and counting it as "work" would mean the
         fleet never goes home.
 
@@ -1003,12 +1024,16 @@ class FleetManager(Node):
         if robot.status not in (RobotStatus.IDLE, RobotStatus.CHARGING):
             return True
         with self._lock:
-            for tid in list(self.pending):
-                task = self.tasks.get(tid)
-                if task is None or task.state != TaskState.PENDING:
-                    continue
-                if self._can_serve(robot, task):
-                    return True
+            return self._pending_work_for_locked(robot)
+
+    def _pending_work_for_locked(self, robot: RobotState) -> bool:
+        """Check queued work while the caller holds the fleet lock."""
+        for tid in list(self.pending):
+            task = self.tasks.get(tid)
+            if task is None or task.state != TaskState.PENDING:
+                continue
+            if self._can_serve(robot, task):
+                return True
         return False
 
     def _start_docking(self, robot: RobotState) -> None:
@@ -1019,7 +1044,7 @@ class FleetManager(Node):
         on its way to the bay.
         """
         with self._lock:
-            if robot.status != RobotStatus.IDLE or self._work_for(robot):
+            if robot.status != RobotStatus.IDLE or self._pending_work_for_locked(robot):
                 return
             self._idle_since[robot.id] = None
             robot.status = RobotStatus.CHARGING
@@ -1281,6 +1306,14 @@ class FleetManager(Node):
             self.nav_mode[robot.id] = "nav2"
         return handle, err
 
+    def _locomotion_available(self, robot_id: str, now: float) -> bool:
+        """Require fresh balance readiness only for legged robots."""
+        health = getattr(self, "locomotion_health", {})
+        if robot_id not in health:
+            return True
+        ready, stamp = health[robot_id]
+        return ready and 0.0 <= now - stamp < 1.0
+
     def _send_goal(self, robot: RobotState, target: Pose2D, tag: str):
         """Hand one NavigateToPose goal to Nav2.
 
@@ -1291,6 +1324,8 @@ class FleetManager(Node):
         timed-out goal has to fail the leg honestly instead of silently
         "delivering" cargo the robot never carried.
         """
+        if robot.id in getattr(self, "locomotion_health", {}) and not self._locomotion_available(robot.id, self._now()):
+            return None, "locomotion_unavailable"
         client = self.nav_clients[robot.id]
         if not client.wait_for_server(timeout_sec=10.0):
             return None, "unavailable"
@@ -1344,10 +1379,17 @@ class FleetManager(Node):
         if anchor is not None:
             best = self._goal_error(anchor, target)
             last_distance = math.hypot(anchor[0] - target.x, anchor[1] - target.y)
-        last_progress = time.time()
+        last_progress = self._now()
+        last_seen = last_progress
 
         while not result_future.done():
             time.sleep(0.1)
+            if robot.id in getattr(self, "locomotion_health", {}) and not self._locomotion_available(robot.id, self._now()):
+                handle = self.active_goal.get(robot.id)
+                if handle is not None:
+                    handle.cancel_goal_async()
+                self.get_logger().error(f"{robot.id}: locomotion not ready; stopping navigation")
+                return 6, False, last_distance
             if self.route_dirty.get(robot.id):
                 # The fleet was re-planned while this leg was running and the
                 # route this robot is driving is no longer the committed one.
@@ -1357,6 +1399,10 @@ class FleetManager(Node):
                 return "retask", False, last_distance
             if self.use_cbs or not self.stall_enabled:
                 continue
+            motion_now = self._now()
+            if motion_now < last_seen:
+                best, anchor, last_progress = None, self._live_xy(robot.id), motion_now
+            last_seen = motion_now
             xy = self._live_xy(robot.id)
             if xy is None:
                 continue
@@ -1364,11 +1410,11 @@ class FleetManager(Node):
             last_distance = distance
             error = self._goal_error(xy, target)
             if best is None or best - error > self.stall_move_eps_m:
-                best, anchor, last_progress = error, xy, time.time()
+                best, anchor, last_progress = error, xy, self._now()
             elif math.hypot(xy[0] - anchor[0], xy[1] - anchor[1]) \
                     > self.stall_wander_m:
-                anchor, last_progress = xy, time.time()
-            elif time.time() - last_progress > self.stall_timeout_sec:
+                anchor, last_progress = xy, self._now()
+            elif self._now() - last_progress > self.stall_timeout_sec:
                 return None, True, distance
 
         result = result_future.result()
@@ -1385,6 +1431,8 @@ class FleetManager(Node):
 
     def _short_backoff(self, name):
         """One bounded collision-checked escape; None means ownership uncertain."""
+        if name in getattr(self, "locomotion_health", {}) and not self._locomotion_available(name, self._now()):
+            return 0.0
         length = getattr(self, "stall_backoff_distance_m", 0.0)
         now = time.monotonic()
         if length <= 0 or now-self.last_backoff.get(name, -math.inf) < self.stall_backoff_cooldown_sec:
@@ -1413,8 +1461,11 @@ class FleetManager(Node):
         handle = pending.result()
         if handle is None or not handle.accepted: return 0.0
         future = handle.get_result_async()
-        deadline = time.monotonic()+6.0
-        while not future.done() and time.monotonic()<deadline: time.sleep(.02)
+        motion_deadline = self._now()+6.0
+        wall_deadline = time.monotonic()+180.0
+        while (not future.done() and self._now()<motion_deadline
+               and time.monotonic()<wall_deadline):
+            time.sleep(.02)
         if not future.done():
             handle.cancel_goal_async()
             deadline = time.monotonic()+3.0
@@ -1481,7 +1532,8 @@ class FleetManager(Node):
                     # Without Nav2 we still want the *scheduling* experiment to
                     # run, so fall back to a kinematic estimate rather than
                     # failing the task.
-                    return self._simulate_leg(robot, target)
+                    if robot.type != "g1_humanoid":
+                        return self._simulate_leg(robot, target)
                 return False, 0.0, 0.0
             if err is not None:
                 # A rejection means Nav2 is running but would not take the goal
@@ -1589,6 +1641,21 @@ class FleetManager(Node):
             # contradicted. The odometry-driven correction in _on_odom
             # supplies the real pose on the next idle tick either way.
             if not ok:
+                # Nav2 can exhaust controller retries before our stall watchdog
+                # fires. Recover an aborted G1 leg once, after Nav2 is terminal;
+                # never back up a canceled, unhealthy or already recovered leg.
+                if (status == 6 and robot.type == "g1_humanoid"
+                        and not backoff_used
+                        and distance > self.stall_arrive_radius_m):
+                    backoff_used = True
+                    escaped = self._short_backoff(robot.id)
+                    if escaped is None:
+                        return False, 0.0, 0.0
+                    if escaped > 0.0:
+                        extra_dist += escaped
+                        self.get_logger().info(
+                            f"{robot.id}: retrying {tag} after bounded abort recovery")
+                        continue
                 return False, 0.0, 0.0
             robot.pose = Pose2D(target.x, target.y, target.yaw)
             driven = straight + extra_dist
@@ -1615,6 +1682,8 @@ class FleetManager(Node):
 
     def _fail(self, robot: RobotState, task: Task, reason: str) -> None:
         """Mark a task failed. One requeue attempt, then give up."""
+        self._release_zone(robot, task.pickup)
+        self._release_zone(robot, task.dropoff)
         with self._lock:
             task.requeue_count += 1
             if task.requeue_count <= 1:
@@ -1672,10 +1741,12 @@ class FleetManager(Node):
         if seconds <= 0:
             return
         remaining = seconds
-        step = 0.2
+        previous = self._now()
         while remaining > 0 and rclpy.ok():
-            time.sleep(min(step, remaining))
-            remaining -= step
+            time.sleep(.1)
+            now = self._now()
+            remaining -= max(0., now - previous)
+            previous = now
 
     # ---------------------------------------------------------------- housekeeping
 
@@ -1832,8 +1903,18 @@ class FleetManager(Node):
         arr = MarkerArray()
         now = self.get_clock().now().to_msg()
 
-        # --- task markers -------------------------------------------------
-        for i, (tid, t) in enumerate(sorted(self.tasks.items())):
+        tasks = sorted(self.tasks.items())
+        pairs = {}
+        for tid, t in tasks:
+            key = (t.pickup.x, t.pickup.y, t.dropoff.x, t.dropoff.y)
+            pairs.setdefault(key, []).append(tid)
+        # Offset identical transport pairs so completion is never hidden.
+        for i, (tid, t) in enumerate(tasks):
+            group = pairs[(t.pickup.x, t.pickup.y, t.dropoff.x, t.dropoff.y)]
+            offset = .18 * (group.index(tid) - (len(group) - 1) / 2)
+            dx, dy = t.dropoff.x-t.pickup.x, t.dropoff.y-t.pickup.y
+            length = max(math.hypot(dx, dy), 1e-6)
+            ox, oy = -dy / length * offset, dx / length * offset
             colour = {
                 TaskState.PENDING: (1.0, 0.8, 0.0),
                 TaskState.ASSIGNED: (1.0, 0.5, 0.0),
@@ -1855,9 +1936,9 @@ class FleetManager(Node):
             m.scale.x = 0.06
             m.color.r, m.color.g, m.color.b, m.color.a = *colour, 0.9
             p0 = PoseStamped().pose.position
-            p0.x, p0.y, p0.z = t.pickup.x, t.pickup.y, 0.15
+            p0.x, p0.y, p0.z = t.pickup.x+ox, t.pickup.y+oy, 0.15
             p1 = PoseStamped().pose.position
-            p1.x, p1.y, p1.z = t.dropoff.x, t.dropoff.y, 0.15
+            p1.x, p1.y, p1.z = t.dropoff.x+ox, t.dropoff.y+oy, 0.15
             m.points = [p0, p1]
             arr.markers.append(m)
 
@@ -1869,11 +1950,11 @@ class FleetManager(Node):
             tm.id = i
             tm.type = Marker.TEXT_VIEW_FACING
             tm.action = Marker.ADD
-            tm.pose.position.x = (t.pickup.x + t.dropoff.x) / 2.0
-            tm.pose.position.y = (t.pickup.y + t.dropoff.y) / 2.0
-            tm.pose.position.z = 0.8
+            tm.pose.position.x = (t.pickup.x + t.dropoff.x) / 2.0 + ox
+            tm.pose.position.y = (t.pickup.y + t.dropoff.y) / 2.0 + oy
+            tm.pose.position.z = 0.8 + .45 * group.index(tid)
             tm.scale.z = 0.35
-            tm.color.r, tm.color.g, tm.color.b, tm.color.a = 1.0, 1.0, 1.0, 1.0
+            tm.color.r, tm.color.g, tm.color.b, tm.color.a = *colour, 1.0
             tm.text = f"{t.id} [{t.state.value}]"
             if t.assigned_robot:
                 tm.text += f" @{t.assigned_robot}"
@@ -1963,21 +2044,28 @@ class FleetManager(Node):
 
         self.marker_pub.publish(arr)
 
-    def _report(self) -> None:
-        line = self.metrics.log_line(list(self.robots.values()))
-        self.get_logger().info(f"[metrics] {line}")
-
-        # Persist on every report so a crash still leaves usable data.
-        outdir = self.metrics_dir
-        if outdir:
+    def _sync_task_outputs(self) -> None:
+        # Display or disk errors must never turn a delivered task into failure.
+        for update in (self._report, self._publish_markers):
             try:
-                self.metrics.write_json(
-                    os.path.join(outdir, "metrics.json"),
-                    list(self.robots.values()),
-                )
-                self.metrics.write_csv(os.path.join(outdir, "tasks.csv"))
-            except OSError as exc:
-                self.get_logger().warn(f"could not write metrics: {exc}")
+                update()
+            except Exception as exc:
+                self.get_logger().warn(f"task output update failed: {exc!r}")
+
+    def _report(self) -> None:
+        # Timer and completion workers must not overwrite a newer report.
+        with self._metrics_io_lock:
+            with self._lock:
+                metrics = copy.deepcopy(self.metrics)
+                robots = copy.deepcopy(list(self.robots.values()))
+            self.get_logger().info(f"[metrics] {metrics.log_line(robots)}")
+            outdir = self.metrics_dir
+            if outdir:
+                try:
+                    metrics.write_json(os.path.join(outdir, "metrics.json"), robots)
+                    metrics.write_csv(os.path.join(outdir, "tasks.csv"))
+                except OSError as exc:
+                    self.get_logger().warn(f"could not write metrics: {exc}")
 
     def destroy_node(self):
         if self._cbs_executor is not None:

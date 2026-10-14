@@ -1,4 +1,3 @@
-# Dispersed indoor sites; north-room tasks require light_payload (2026-10-10).
 tasks:
 - id: task_001
   type: transport
@@ -49,27 +48,27 @@ tasks:
   - -33.8
   - 0.0
   dropoff:
-  - 8.0
-  - -43.6
+  - 10.22
+  - -37.5
   - 0.0
-  payload_kg: 120.0
-  required_capability: heavy_payload
+  payload_kg: 1.0
+  required_capability: humanoid_transport
   priority: 4
-  deadline_sec: 420.0
+  deadline_sec: 600.0
 - id: task_005
   type: transport
   pickup:
-  - 5.0
-  - -67.0
+  - 13.0
+  - -30.0
   - 0.0
   dropoff:
-  - 10.2
-  - -49.2
+  - 8.0
+  - -25.6
   - 0.0
-  payload_kg: 95.0
-  required_capability: heavy_payload
+  payload_kg: 2.0
+  required_capability: humanoid_transport
   priority: 2
-  deadline_sec: 420.0
+  deadline_sec: 600.0
 - id: task_006
   type: transport
   pickup:
@@ -136,7 +135,7 @@ tasks:
   - 6.0
   - -70.0
   - 0.0
-  payload_kg: 200.0
+  payload_kg: 120.0
   required_capability: heavy_payload
   priority: 1
   deadline_sec: 600.0

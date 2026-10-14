@@ -1,4 +1,4 @@
-# Dispersed indoor sites; north-room tasks require light_payload (2026-10-10).
+# Twenty distinct pairs; G1 jobs central, northern rooms light-only.
 tasks:
 - id: t01
   type: transport
@@ -101,17 +101,17 @@ tasks:
 - id: t08
   type: transport
   pickup:
-  - 9.0
-  - -53.5
+  - 10.0
+  - -33.8
   - 0.0
   dropoff:
   - 8.0
   - -25.6
   - 0.0
-  payload_kg: 9.0
-  required_capability: light_payload
+  payload_kg: 1.0
+  required_capability: humanoid_transport
   priority: 5
-  deadline_sec: 60.0
+  deadline_sec: 600.0
 - id: t09
   type: transport
   pickup:
@@ -185,31 +185,31 @@ tasks:
 - id: t14
   type: transport
   pickup:
-  - 10.0
-  - -33.8
-  - 0.0
-  dropoff:
-  - 10.2
-  - -49.2
-  - 0.0
-  payload_kg: 40.0
-  required_capability: ''
-  priority: 4
-  deadline_sec: 380.0
-- id: t15
-  type: transport
-  pickup:
-  - 5.0
-  - -67.0
+  - 13.0
+  - -30.0
   - 0.0
   dropoff:
   - 8.0
   - -25.6
   - 0.0
-  payload_kg: 6.0
-  required_capability: light_payload
+  payload_kg: 2.0
+  required_capability: humanoid_transport
+  priority: 4
+  deadline_sec: 600.0
+- id: t15
+  type: transport
+  pickup:
+  - 2.97
+  - -30.25
+  - 0.0
+  dropoff:
+  - 10.22
+  - -37.5
+  - 0.0
+  payload_kg: 3.0
+  required_capability: humanoid_transport
   priority: 2
-  deadline_sec: 280.0
+  deadline_sec: 600.0
 - id: t16
   type: transport
   pickup:

@@ -45,6 +45,8 @@ KNOWN_CAPABILITIES = {
     "narrow_aisle",
     "precise_docking",
     "omnidirectional",
+    "humanoid_transport",
+    "manual_handling",
     "",
 }
 

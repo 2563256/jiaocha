@@ -1,3 +1,9 @@
+> 快速运行更新：轻型/重型/omni 上限为 1.00/0.65/0.80 m/s，G1 为 0.45 m/s；使用 fast.launch.py 减少渲染负担。见 [FAST_RUN.md](FAST_RUN.md)。
+
+> 2026-10-12：导航计时、G1 转向、五台速度与 omni 示例模型已更新；最新设置、验证范围和重启指令见 [NAVIGATION_FIXES_20261012.md](NAVIGATION_FIXES_20261012.md)。
+
+> 2026-10-11：已增加 G1 人形机器人，车队共五台。10/20 任务场景已同步，G1 有专属任务；运行步骤与验证范围见 [G1_INTEGRATION.md](G1_INTEGRATION.md)。
+
 ## 2026-10-10 x=2 分散充电位
 
 light_1=(2.00,-11.50)，light_2=(2.00,-21.50)，heavy_1=(2.00,-38.00)，omni_1=(2.00,-69.50)，yaw 均为 0。
@@ -430,7 +436,7 @@ FastRTPS 残留的 `/dev/shm` 段，并打印还剩几个进程（期望 `0` 和
 | 发了任务没反应 | `/task_request` 有没有订阅者（fleet_manager 在不在）；高负载下仍可能丢包，重发即可 |
 | 日志 goal rejected | Nav2 未就绪或目标不可达；任务会自动重排队 |
 | 日志 `goal is occupied` / 车原地转 | 任务点不在自由格上：跑 `python3 tools/verify_scene.py`，它会指出是哪一个点 |
-| 日志 `no robot for task_x` | 没有车满足能力/载重/电量，任务留在 PENDING（demo 里故意放了一条 200 kg 的） |
+| 日志 `no robot for task_x` | 没有车满足能力/载重/电量，任务留在 PENDING（应检查任务是否超出车型能力；当前 demo_10 最大载荷 120 kg） |
 | 车只在一条走廊里走来走去 | 正常：这张扫描图只有这一条连通可通行区域，见 `MAP_SWAP.md` 第 1、6 节 |
 | 机器很卡 | 用 `headless:=true rviz:=false`；或进一步减少 `robot_profiles.yaml` 里的车队规模 |
 

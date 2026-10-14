@@ -42,6 +42,7 @@ NAV2_PARAM_FILE = {
     "light_diff_amr": "nav2_params_light.yaml",
     "heavy_diff_amr": "nav2_params_heavy.yaml",
     "omni_mecanum_amr": "nav2_params_omni.yaml",
+    "g1_humanoid": "nav2_params_g1.yaml",
 }
 
 
@@ -344,44 +345,37 @@ def launch_setup(context, *args, **kwargs):
             if rtype["kinematics"] == "mecanum"
             else f"/{name}/{controller_name}/cmd_vel"
         )
-        actions.append(
-            TimerAction(
-                period=delay + 2.0,
-                actions=[
-                    Node(
-                        package="hetero_fleet_bringup",
-                        executable="cmd_vel_stamper.py",
-                        name="cmd_vel_stamper",
-                        namespace=name,
-                        output="screen",
-                        parameters=[
-                            {
-                                "use_sim_time": use_sim_time,
-                                "robot_name": name,
-                                "controller_name": controller_name,
-                                "output_topic": stamper_output,
-                                # Take the command from the collision
-                                # monitor's output rather than straight from
-                                # the smoother, so the safety layer is really
-                                # in the chain.
-                                "input_topic": f"/{name}/cmd_vel",
-                                # The simulated mecanum base answers a +y
-                                # command with -y motion, so the stamper flips
-                                # linear.y on the way to the controller. See
-                                # the roller-orientation note in
-                                # omni_mecanum_amr.xacro: swapping the roller
-                                # diagonals does not remove this, it only
-                                # halves the strafe gain.
-                                "mirror_y": (
-                                    True if rtype["kinematics"] == "mecanum"
-                                    else False
-                                ),
-                            }
-                        ],
-                    )
-                ],
+        if rtype["kinematics"] != "legged":
+            actions.append(
+                TimerAction(
+                    period=delay + 2.0,
+                    actions=[
+                        Node(
+                            package="hetero_fleet_bringup",
+                            executable="cmd_vel_stamper.py",
+                            name="cmd_vel_stamper",
+                            namespace=name,
+                            output="screen",
+                            parameters=[
+                                {
+                                    "use_sim_time": use_sim_time,
+                                    "robot_name": name,
+                                    "controller_name": controller_name,
+                                    "output_topic": stamper_output,
+                                    # Take the command from the collision
+                                    # monitor's output rather than straight from
+                                    # the smoother, so the safety layer is really
+                                    # in the chain.
+                                    "input_topic": f"/{name}/cmd_vel",
+                                    # Example X-arranged contacts use standard lateral signs.
+                                    "angular_z_scale": 0.95 if rtype["kinematics"] == "mecanum" else 1.0,
+                                    "mirror_y": False,
+                                }
+                            ],
+                        )
+                    ],
+                )
             )
-        )
 
         # --- lifecycle manager: activates everything in the namespace -----
         actions.append(

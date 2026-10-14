@@ -213,6 +213,8 @@ def make_manager(nav=None, return_to_charger=True, charger=(5.0, 5.0, 0.0)):
     m.get_clock = lambda: SimpleNamespace(
         now=lambda: SimpleNamespace(to_msg=lambda: None)
     )
+    m._now = time.monotonic
+    m.zone_claims = {}
     m.slot_clearance = {"r1": 0.25}
     m.charger_pose = {"r1": Pose2D(*charger)}
     m.live_pose = {}
@@ -623,6 +625,7 @@ def test_short_backoff_is_small_and_has_robot_cooldown():
             feedback_callback(SimpleNamespace(feedback=SimpleNamespace(distance_traveled=.12)))
             result=resolved(SimpleNamespace(status=4,result=SimpleNamespace(distance_traveled=.12)))
             return resolved(SimpleNamespace(accepted=True,get_result_async=lambda:result))
+    m._now = time.monotonic
     m.backup_clients={'heavy_1':Client()};m.get_logger=lambda:_Logger()
     assert m._short_backoff('heavy_1')==pytest.approx(.12)
     assert m._short_backoff('heavy_1')==0.
@@ -643,6 +646,7 @@ def test_obstructed_short_backoff_does_not_repeat_or_claim_full_distance():
             feedback_callback(SimpleNamespace(feedback=SimpleNamespace(distance_traveled=.02)))
             result=resolved(SimpleNamespace(status=6,result=SimpleNamespace(distance_traveled=.02)))
             return resolved(SimpleNamespace(accepted=True,get_result_async=lambda:result))
+    m._now = time.monotonic
     m.backup_clients={'heavy_1':Client()};m.get_logger=lambda:_Logger()
     assert m._short_backoff('heavy_1')==pytest.approx(.02)
     assert m._short_backoff('heavy_1')==0.
@@ -680,3 +684,34 @@ def test_robot_skips_home_if_eligible_work_arrives_before_docking():
     nav=ScriptedNav(m,'r1',['drive'],pose=(1.,1.,0.));place(m,(1.,1.,0.));m.nav_clients['r1']=nav
     m._drive_home(robot)
     assert not nav.goals and robot.status==RobotStatus.IDLE
+
+
+def test_start_docking_does_not_reacquire_the_fleet_lock():
+    m = make_manager()
+    robot = m.robots['r1']
+    robot.status = RobotStatus.IDLE
+    entered = threading.Event()
+    m._drive_home = lambda r: entered.set()
+    worker = threading.Thread(target=m._start_docking, args=(robot,), daemon=True)
+    worker.start()
+    worker.join(.5)
+    assert not worker.is_alive(), 'return-to-charger deadlocked the scheduler'
+    assert entered.wait(.5)
+    assert robot.status == RobotStatus.CHARGING
+
+
+def test_start_docking_keeps_robot_idle_when_eligible_work_is_queued():
+    m = make_manager()
+    robot = m.robots['r1']
+    robot.status = RobotStatus.IDLE
+    robot.capabilities = ['light_payload']
+    robot.payload_capacity_kg = 20.
+    m.tasks = {'queued': Task(id='queued', pickup=Pose2D(1,1,0), dropoff=Pose2D(2,2,0), required_capability='light_payload',payload_kg=1.)}
+    m.tasks['queued'].state = TaskState.PENDING
+    m.pending = ['queued']
+    m._drive_home = lambda r: pytest.fail('queued task must take precedence over docking')
+    worker = threading.Thread(target=m._start_docking, args=(robot,), daemon=True)
+    worker.start()
+    worker.join(.5)
+    assert not worker.is_alive()
+    assert robot.status == RobotStatus.IDLE

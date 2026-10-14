@@ -16,7 +16,7 @@ def scene():
     planner=FleetPlanner(str(ROOT/'src/hetero_fleet_bringup/maps/geomap.yaml'),margin=.30,time_limit=3)
     return profile,planner
 
-@pytest.mark.parametrize('who',['light_1','light_2','heavy_1','omni_1'])
+@pytest.mark.parametrize('who',['light_1','light_2','heavy_1','omni_1','g1_1'])
 @pytest.mark.parametrize('goal',GOALS)
 def test_each_robot_can_reach_each_zone_while_teammates_remain_parked(scene,who,goal):
     if goal in NORTH and who not in ('light_1','light_2'):

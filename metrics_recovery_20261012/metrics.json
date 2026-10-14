@@ -1,0 +1,157 @@
+{
+  "summary": {
+    "tasks_submitted": 7,
+    "tasks_completed": 5,
+    "tasks_failed": 1,
+    "completion_rate": 0.7143,
+    "mean_completion_time_sec": 128.206,
+    "makespan_sec": 154.863,
+    "total_distance_m": 218.856,
+    "total_energy_wh": 253.735,
+    "utilisation": 0.7052,
+    "reschedule_count": 13,
+    "tardy_tasks": 1,
+    "per_robot": {
+      "light_1": {
+        "tasks_completed": 2,
+        "distance_m": 53.699,
+        "energy_wh": 47.706,
+        "battery_pct": 86.6,
+        "busy_sec": 154.863
+      },
+      "light_2": {
+        "tasks_completed": 1,
+        "distance_m": 65.396,
+        "energy_wh": 56.593,
+        "battery_pct": 83.7,
+        "busy_sec": 96.739
+      },
+      "heavy_1": {
+        "tasks_completed": 1,
+        "distance_m": 37.994,
+        "energy_wh": 73.414,
+        "battery_pct": 90.5,
+        "busy_sec": 146.887
+      },
+      "omni_1": {
+        "tasks_completed": 1,
+        "distance_m": 61.766,
+        "energy_wh": 76.022,
+        "battery_pct": 84.6,
+        "busy_sec": 147.547
+      },
+      "g1_1": {
+        "tasks_completed": 0,
+        "distance_m": 0.0,
+        "energy_wh": 0.0,
+        "battery_pct": 100.0,
+        "busy_sec": 0.0
+      }
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "task_002",
+      "type": "transport",
+      "robot_id": "light_1",
+      "priority": 1,
+      "payload_kg": 12.0,
+      "required_capability": "light_payload",
+      "created_at_sec": 293.069,
+      "assigned_at_sec": 293.069,
+      "completed_at_sec": 389.102,
+      "completion_time_sec": 96.033,
+      "deadline_sec": 300.0,
+      "tardy": 0,
+      "requeue_count": 0,
+      "distance_m": 21.145,
+      "energy_wh": 19.4493
+    },
+    {
+      "task_id": "task_003",
+      "type": "transport",
+      "robot_id": "light_2",
+      "priority": 3,
+      "payload_kg": 5.0,
+      "required_capability": "light_payload",
+      "created_at_sec": 293.239,
+      "assigned_at_sec": 293.239,
+      "completed_at_sec": 389.978,
+      "completion_time_sec": 96.739,
+      "deadline_sec": 240.0,
+      "tardy": 0,
+      "requeue_count": 0,
+      "distance_m": 16.868,
+      "energy_wh": 15.3443
+    },
+    {
+      "task_id": "task_005",
+      "type": "transport",
+      "robot_id": "g1_1",
+      "priority": 2,
+      "payload_kg": 2.0,
+      "required_capability": "humanoid_transport",
+      "created_at_sec": 293.445,
+      "assigned_at_sec": 395.477,
+      "completed_at_sec": "",
+      "completion_time_sec": "",
+      "deadline_sec": 600.0,
+      "tardy": "",
+      "requeue_count": 2,
+      "distance_m": "",
+      "energy_wh": "",
+      "failure_reason": "navigation to pickup failed"
+    },
+    {
+      "task_id": "task_008",
+      "type": "transport",
+      "robot_id": "heavy_1",
+      "priority": 5,
+      "payload_kg": 9.0,
+      "required_capability": "",
+      "created_at_sec": 293.9,
+      "assigned_at_sec": 293.9,
+      "completed_at_sec": 440.787,
+      "completion_time_sec": 146.887,
+      "deadline_sec": 60.0,
+      "tardy": 1,
+      "requeue_count": 0,
+      "distance_m": 37.994,
+      "energy_wh": 73.414
+    },
+    {
+      "task_id": "task_007",
+      "type": "transport",
+      "robot_id": "omni_1",
+      "priority": 1,
+      "payload_kg": 27.0,
+      "required_capability": "",
+      "created_at_sec": 293.667,
+      "assigned_at_sec": 293.667,
+      "completed_at_sec": 441.214,
+      "completion_time_sec": 147.547,
+      "deadline_sec": 360.0,
+      "tardy": 0,
+      "requeue_count": 0,
+      "distance_m": 39.902,
+      "energy_wh": 51.9713
+    },
+    {
+      "task_id": "task_009",
+      "type": "transport",
+      "robot_id": "light_1",
+      "priority": 2,
+      "payload_kg": 18.0,
+      "required_capability": "light_payload",
+      "created_at_sec": 294.11,
+      "assigned_at_sec": 389.102,
+      "completed_at_sec": 447.932,
+      "completion_time_sec": 153.822,
+      "deadline_sec": 300.0,
+      "tardy": 0,
+      "requeue_count": 0,
+      "distance_m": 6.415,
+      "energy_wh": 6.0383
+    }
+  ]
+}

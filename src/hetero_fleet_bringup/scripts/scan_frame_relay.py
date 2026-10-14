@@ -115,6 +115,7 @@ class ScanFrameRelay(Node):
                 ),
                 "half_length": 0.5 * length,
                 "half_width": 0.5 * width,
+                "legged": types[entry["type"]]["kinematics"] == "legged",
                 "pose": None,          # (x, y, yaw) on the map
             }
 
@@ -169,7 +170,10 @@ class ScanFrameRelay(Node):
     def publish_robot_obstacles(self, scan, name):
         """Synthetic scan with one blob per other robot, in the lidar frame."""
         out = LaserScan()
-        out.header = scan.header
+        out.header.stamp = scan.header.stamp
+        out.header.frame_id = (f"{name}/base_footprint"
+                               if self.robots[name].get("legged", False)
+                               else scan.header.frame_id)
         out.angle_min = scan.angle_min
         out.angle_max = scan.angle_max
         out.angle_increment = scan.angle_increment

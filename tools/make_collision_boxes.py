@@ -108,7 +108,7 @@ def merge_rectangles(mask):
     return rects
 
 
-def build_boxes(occupied, res, margin_m, margin_x, margin_y, block=1):
+def build_boxes(occupied, res, margin_m, margin_x, margin_y, block=1, solid_occupied=False):
     """Obstacle cells that touch drivable floor, as world-frame boxes.
 
     `block` coarsens the band before the rectangle decomposition: an N x N
@@ -126,13 +126,18 @@ def build_boxes(occupied, res, margin_m, margin_x, margin_y, block=1):
 
     free = ~occupied
     cells = max(1, int(round(margin_m / res)))
-    band = occupied & ndimage.binary_dilation(free, iterations=cells)
+    band = occupied.copy() if solid_occupied else occupied & ndimage.binary_dilation(free, iterations=cells)
     if block > 1:
         h, w = band.shape
         hh, ww = (h // block) * block, (w // block) * block
         band = band[:hh, :ww].reshape(hh // block, block, ww // block, block).any(axis=(1, 3))
         res = res * block
     rects = merge_rectangles(band)
+    # Both covers are exact. Choose the orientation with fewer DART shapes.
+    transposed = [[r0, r1+1, c0, c1-1]
+                  for c0, c1, r0, r1 in merge_rectangles(band.T)]
+    if len(transposed) < len(rects):
+        rects = transposed
 
     # NOTE: the row/column indices below are into the (possibly coarsened)
     # band, so the grid height must come from `band` - using the full-resolution
@@ -204,6 +209,8 @@ def main():
                          "wedges robots on paths the planner thinks are clear)")
     ap.add_argument("--base-z", type=float, default=-0.05,
                     help="collider bottom, just under the world ground plane")
+    ap.add_argument("--solid-occupied", action="store_true",
+                    help="Cover the full occupied raster exactly. Often fewer boxes than a jagged boundary band; never fills free cells.")
     ap.add_argument("--report", action="store_true")
     a = ap.parse_args()
 
@@ -213,7 +220,7 @@ def main():
     occupied = img < 128           # map_server negate=0: black is an obstacle
     x0, y0 = meta["origin"][0], meta["origin"][1]
 
-    boxes = build_boxes(occupied, res, a.margin, x0, y0, a.block)
+    boxes = build_boxes(occupied, res, a.margin, x0, y0, a.block, a.solid_occupied)
     model_path = Path(a.model)
     model_name = model_path.parent.name
     write_model_sdf(model_path, model_name, boxes, a.height, a.base_z)

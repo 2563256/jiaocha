@@ -28,7 +28,7 @@ from scipy import ndimage
 
 ZONE_NAMES = ([f"pickup_{c}" for c in "ABCDEFG"]
               + [f"dropoff_{c}" for c in "ABCDEF"]
-              + [f"charger_{c}" for c in "ABCD"])
+              + [f"charger_{c}" for c in "ABCDE"])
 
 
 def load_map(yaml_path):

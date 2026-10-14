@@ -20,12 +20,14 @@ heavier than the lab map the workspace ran before it.
 
 import importlib.util
 import os
+import uuid
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     ExecuteProcess,
+    SetEnvironmentVariable,
     IncludeLaunchDescription,
     TimerAction,
 )
@@ -125,6 +127,7 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("use_cbs", default_value="false"),
             DeclareLaunchArgument("headless", default_value="false"),
+            SetEnvironmentVariable("GZ_PARTITION", os.environ.get("GZ_PARTITION") or "hetero_fleet_" + uuid.uuid4().hex),
             DeclareLaunchArgument("rviz", default_value="true"),
             DeclareLaunchArgument("use_sim_time", default_value="true"),
             DeclareLaunchArgument(

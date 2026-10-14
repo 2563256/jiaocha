@@ -81,7 +81,7 @@ GROUND_VISUAL_DZ = -0.30
 # (back to 1 ms) needs fewer colliders first: rerun make_collision_boxes.py
 # with a smaller --margin, or --block 2, which is cheaper but fattens every
 # wall by up to 5 cm and can wedge a robot on a path the planner certified.
-PHYSICS_STEP = 0.005
+PHYSICS_STEP = 0.001  # G1 torque policy requires 1 ms integration.
 PHYSICS_RATE = int(round(1.0 / PHYSICS_STEP))  # target steps per second
 PHYSICS_NAME = f"{PHYSICS_STEP * 1000:g}ms"
 
@@ -111,6 +111,7 @@ ZONES = [
     ('charger_B', 2.00, -21.50, 0.5, 0.5, '0.95 0.80 0.10 0.55'),
     ('charger_C', 2.00, -38.00, 0.5, 0.5, '0.95 0.80 0.10 0.55'),
     ('charger_D', 2.00, -69.50, 0.5, 0.5, '0.95 0.80 0.10 0.55'),
+    ('charger_E', 2.70, -32.00, 0.5, 0.5, '0.95 0.80 0.10 0.55'),
 ]
 
 HEAD = f"""<?xml version='1.0'?>

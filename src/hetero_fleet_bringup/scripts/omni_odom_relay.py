@@ -28,6 +28,8 @@ class OmniOdomRelay(Node):
         self.spawn_x = self.declare_parameter('spawn_x', 13.0).value
         self.spawn_y = self.declare_parameter('spawn_y', 2.0).value
         self.spawn_yaw = self.declare_parameter('spawn_yaw', 0.0).value
+        self.full_orientation = self.declare_parameter('full_orientation', False).value
+        self.ground_z = self.declare_parameter('ground_z', 0.117).value
         # Gazebo publishes the pose array far faster than Nav2 needs it. Doing
         # Python math and publishing odom + TF on every message costs ~25% of a
         # core per robot, which is enough to push this machine into thrashing
@@ -136,6 +138,24 @@ class OmniOdomRelay(Node):
         transform.transform.translation.y = y
         transform.transform.rotation = odom.pose.pose.orientation
         self.tf_broadcaster.sendTransform(transform)
+        if self.full_orientation:
+            # Keep the navigation/synthetic obstacle frame planar. The physical
+            # body's tilt belongs in base_footprint -> base_link, so the high
+            # lidar gets its true 3-D pose without tilting teammate scans.
+            body = TransformStamped()
+            body.header.stamp = stamp
+            body.header.frame_id = base_frame
+            body.child_frame_id = f'{self.robot_name}/base_link'
+            body.transform.translation.z = pose.translation.z - self.ground_z
+            q = pose.rotation
+            # Remove the WORLD yaw; base_footprint already supplies this yaw.
+            half_world_yaw = self.yaw_from_quaternion(q) / 2
+            c, s = math.cos(half_world_yaw), math.sin(half_world_yaw)
+            body.transform.rotation.x = c*q.x + s*q.y
+            body.transform.rotation.y = c*q.y - s*q.x
+            body.transform.rotation.z = c*q.z - s*q.w
+            body.transform.rotation.w = c*q.w + s*q.z
+            self.tf_broadcaster.sendTransform(body)
 
 
 def main():

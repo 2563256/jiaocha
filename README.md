@@ -1,3 +1,9 @@
+> 快速运行更新：轻型/重型/omni 上限为 1.00/0.65/0.80 m/s，G1 为 0.45 m/s；使用 fast.launch.py 减少渲染负担。见 [FAST_RUN.md](FAST_RUN.md)。
+
+> 2026-10-12：导航计时、G1 转向、五台速度与 omni 示例模型已更新；最新设置、验证范围和重启指令见 [NAVIGATION_FIXES_20261012.md](NAVIGATION_FIXES_20261012.md)。
+
+> 2026-10-11：已增加 G1 人形机器人，车队共五台。10/20 任务场景已同步，G1 有专属任务；运行步骤与验证范围见 [G1_INTEGRATION.md](G1_INTEGRATION.md)。
+
 ## 2026-10-10 x=2 分散充电位
 
 light_1=(2.00,-11.50)，light_2=(2.00,-21.50)，heavy_1=(2.00,-38.00)，omni_1=(2.00,-69.50)，yaw 均为 0。
@@ -288,7 +294,7 @@ ros2 run hetero_fleet_scheduler task_publisher --single \
   --pickup 2.97 -30.25 --dropoff -1.53 -39.65 --priority 4 --deadline 420
 ```
 
-**方式 B：回放预设场景**（10 个任务，含 1 个故意不可完成的 200 kg）
+**方式 B：回放预设场景**（10 个任务，含 2 个 G1 专属任务，载荷均可执行）
 
 ```bash
 ros2 run hetero_fleet_scheduler task_publisher \

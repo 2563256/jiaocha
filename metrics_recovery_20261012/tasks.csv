@@ -1,0 +1,7 @@
+task_id,type,robot_id,priority,payload_kg,required_capability,created_at_sec,assigned_at_sec,completed_at_sec,completion_time_sec,deadline_sec,tardy,requeue_count,distance_m,energy_wh,failure_reason
+task_002,transport,light_1,1,12.0,light_payload,293.069,293.069,389.102,96.033,300.0,0,0,21.145,19.4493,
+task_003,transport,light_2,3,5.0,light_payload,293.239,293.239,389.978,96.739,240.0,0,0,16.868,15.3443,
+task_005,transport,g1_1,2,2.0,humanoid_transport,293.445,395.477,,,600.0,,2,,,navigation to pickup failed
+task_008,transport,heavy_1,5,9.0,,293.9,293.9,440.787,146.887,60.0,1,0,37.994,73.414,
+task_007,transport,omni_1,1,27.0,,293.667,293.667,441.214,147.547,360.0,0,0,39.902,51.9713,
+task_009,transport,light_1,2,18.0,light_payload,294.11,389.102,447.932,153.822,300.0,0,0,6.415,6.0383,
